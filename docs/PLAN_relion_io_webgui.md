@@ -1,116 +1,115 @@
-# Plan: RELION-style project I/O + web GUI for DeepETPicker
+# Plan (rev 2): DeepETPicker as RELION-US jobs, RELION-style I/O, retire the PyQt GUI
 
-## 1. What the code does today (findings)
+Rev 2 replaces the earlier "build our own FastAPI GUI" idea. After reading
+[schiracha/relion-us](https://github.com/schiracha/relion-us) the web GUI,
+job runner, SLURM path, tomogram viewer and manual picker already exist there,
+so building a second one here would be duplicated work. Decisions from the
+owner: target **RELION 5**; run on a **local GPU workstation now, SLURM
+interactive node later**; **remove the old PyQt GUI only after the new path
+reproduces everything it does, including the non-obvious parts** (section 4).
 
-**Directory layout is implicit and scattered across modules.** One `base_path` is chosen by the user and everything else is derived by string concatenation in several places:
+All claims below come from reading code; nothing was executed (no GPU/torch in
+the planning container).
 
-| Artifact | Where it ends up | Written by | Read by |
-|---|---|---|---|
-| raw tomograms + `.coords` | `raw_data/` (user-made, any name) | user | `coord_gen.py`, `normalization.py` |
-| copied coords + `num_name.csv` | `<base>/coords/` | `utils/coord_gen.py` | `dataloader_DynamicLoad.py:84-102` |
-| standardized tomograms | `<base>/data_std/` (or `data_norm/`) | `utils/normalization.py` | dataloader, `test_bash.py` |
-| weak labels | `<base>/gaussian<diam>/` | `utils/coords2labels.py:36-40` | dataloader |
-| occupancy masks | `<base>/data_ocp/` | `utils/coords2labels.py` | dataloader |
-| checkpoints / TB logs | `<base>/runs/<dset>/<long_hyperparam_name>/version_N/checkpoints/` | `train.py:347` | `test.py` |
-| predictions | `<checkpoint_dir>/../../PredictedLabels/Coords_All` and `Coords_withArea` | `test.py:90-101` | user, `coordFormatConvert.py`, `coords_to_relion4.py` |
+## 1. What exists
 
-Consequences for the "outputs are not well organized" complaint:
-- Predictions live *inside* a TensorBoard version folder, derived by `'/'.join(args.checkpoints.split('/')[:-2])`. Re-running inference overwrites silently; there is no record of which weights/threshold produced which coords.
-- `model_name = args.checkpoints.split('/')[-4] ...` (`test.py:29`) breaks if the checkpoint path has a different depth.
-- Config is a Python file holding `json` after a `train_configs=` / `pre_config=` prefix, parsed with `.lstrip('train_configs=')`. `lstrip` strips a *character set*, not a prefix, so it only works by luck.
-- `num_name.csv` is the only index linking tomogram names to integer ids, in two places (`coords/` and `data_std/`), and `test.py:45` takes `glob(...)[0]` for the data shape, i.e. the *first* tomogram regardless of which one is being tested.
-- RELION output is a bolt-on (`coords_to_relion4.py`, `__main__` with a hard-coded `coord_path/Coords_All`), writes `relion4` as the first line, and zeroes angles; it is not wired to the pipeline.
+### DeepETPicker (this repo)
+- Layout is implicit: one `base_path`, with `coords/`, `data_std/`, `gaussian<d>/`, `data_ocp/`, `runs/...` assembled by string concatenation in about six files. Predictions land inside the TensorBoard version folder (`'/'.join(checkpoint.split('/')[:-2]) + '/PredictedLabels'`, `test.py:90`).
+- Config is a `.py` file holding JSON behind a `train_configs=` / `pre_config=` prefix, parsed with `.lstrip(...)` (strips a character set, not a prefix).
+- `bin/*.py` CLI exists but is a second, diverging implementation of what `main.py` does (section 4, item 1).
+- Core (model, dataloader, train/test loops) takes plain `args`/`cfg` and is reusable.
 
-**GUI fragility (PyQt5 `main.py`, 1.9k lines + generated `MainWindow_3D_PP.py`, 1.8k lines).** Logic, path handling, config parsing, and thread control are in the same class. Training/inference run via `threading.Thread` with stdout swapped via a `stdout` shim; failures are caught by bare `except:` that write "… Exception!" and drop the traceback (`coord_gen.py`, `train.py`). `coord_gen_show`'s error branch calls `stdout.flush()` when `stdout` is `None` in CLI mode, which itself raises. Stop is implemented by pid handling. Old pins (`PyQt5==5.15.4`, `pytorch_lightning==1.1.0`, `torch 1.7.1`, `numpy==1.24.0` while code still uses `np.float`, 18 hits, removed in NumPy 1.24) make installs fragile.
+### RELION-US
+- FastAPI backend (`backend/main.py`), vanilla-JS frontend, ~100 files, pytest + Playwright suites (`run_tests.sh`).
+- Already has a **DeepETPickerImport** job (`custom_jobs.py`, `converters/deepetpicker_bridge.py`): one `.coords` file -> RELION-5 `particles.star`, with binning factor, Y/Z swap and per-axis mirror. It deliberately rejects the 5-column `Coords_withArea` files.
+- Already has the pattern I need: **IsoNet2 jobs** (`isonet_jobs.py`) run an external deep-learning CLI as a real subprocess in a conda env, with SLURM submission, editable command box, per-job `<JobDir>/jobNNN/` output, and a live loss curve on the Progress tab. They go through `job_runner.start_subprocess_job`, not the in-process `custom_jobs` path.
+- A tomogram viewer with pick overlay (laid out "the way DeepETPicker's picker is") and an in-browser manual picker (double-click add, right-click delete; saves into the job dir).
+- Invariants worth inheriting (ARCHITECTURE.md "Invariants"): paths must stay inside the project dir; runners write only into their own job dir; overwrite means backup first; boundary-aware tomogram name matching (`TS_1` vs `TS_10`); subprocess group kill.
 
-**Good news:** the core (dataloader, model, train/test loops, coordinate NMS) is already CLI-callable via `bin/*.py` and takes plain `args`/`cfg` dicts. The I/O contract is concentrated in about six files, so a new layout can be introduced without touching model code.
+## 2. Target architecture
 
-## 2. Target design
+**Split by responsibility:**
+- **DeepETPicker repo** = headless, importable package and a CLI that is a good citizen of a job directory. No GUI, no threads, no `sys.stdout` swapping.
+- **RELION-US** = the GUI. DeepETPicker appears there as job types, exactly as IsoNet2 does.
 
-### 2.1 RELION-like project directory
-A project folder with numbered job directories, one per run, mirroring RELION's `JobType/jobNNN/` convention. Exact names to be checked against the RELION 5 tomography docs and the Relion-Us spec before freezing (see open questions).
+### 2.1 DeepETPicker CLI contract (modelled on `isonet.py`)
+Every subcommand takes `--output_dir <JobDir>/jobNNN/` (RELION-US creates it) and never writes outside it. Inputs are RELION STAR files or plain folders. Results are never written in place into an input.
+
+| Command | Inputs | Writes into `--output_dir` |
+|---|---|---|
+| `deepetpicker prepare` | tomograms (`tomograms.star` or folder), training coords (`particles.star` or folder), label/occupancy diameters, normalization type, n classes | `tomograms_std/`, `coords/`, `labels/`, `occupancy/`, `dataset.star` (replaces both `num_name.csv` files; one row per tomogram: name, id, files, n particles, role train/val/test), `job_params.json` |
+| `deepetpicker train` | `dataset.star` from prepare, train/val tomogram **names** (not positional ids), patch/pad/lr/epochs/GPUs | `checkpoints/`, `metrics.csv` (epoch, train/val loss), `job_params.json` |
+| `deepetpicker predict` | checkpoint, tomograms (STAR or folder), patch/pad/threshold, GPUs | `coords/<tomo>.coords` (native 4-col `class_id x y z`), `coords_with_area/`, `particles.star`, `job_params.json` |
+| `deepetpicker export` | `.coords` folder | `.star` (RELION 3 style), `.box` (EMAN2), per-class split (replaces GUI "coord conversion") |
+
+Exit contract: nonzero exit on any failure, traceback to stderr (no bare `except:`), one progress line per epoch in a documented format so RELION-US can parse it.
+
+### 2.2 RELION-US additions (separate repo, separate PRs)
+New job types under a "DeepETPicker" category, same registration route as IsoNet2: `DeepETPickerPrepare`, `DeepETPickerTrain`, `DeepETPickerPredict` (field definitions + command builder + progress source for the Train loss curve). Keep the existing `DeepETPickerImport` for third-party `.coords` files. Predict's STAR conversion must reuse `deepetpicker_bridge` (single source of truth for coordinate conventions) rather than a second converter in this repo; the bridge needs a small batch mode (many `.coords`, one STAR), which its docstring already anticipates.
+
+### 2.3 Layout
+RELION-US owns `default_pipeline.star`, numbering and `jobNNN` directories; DeepETPicker only fills a job directory. Chain by file, like IsoNet2: Predict's `--model` default points at the Train job's `checkpoints/best.ckpt`, Train's `--dataset_star` at Prepare's `dataset.star`.
 
 ```
-<project>/
-  default_pipeline.star            # job list + input/output edges (RELION convention)
-  DeepETPicker/
-    job001/                        # Preprocess
-      job.star                     # all parameters for this job (replaces pre_config .py)
-      note.txt  run.out  run.err
-      RELION_JOB_EXIT_SUCCESS      # or _FAILURE / _ABORTED
-      tomograms_std/  coords/  labels/  occupancy/
-      manifest.star                # tomo name <-> id <-> files (replaces num_name.csv)
-    job002/                        # Train
-      job.star  run.out  run.err
-      checkpoints/best.ckpt  logs/ (TensorBoard)  metrics.csv
-      train_manifest.star          # which tomos were train/val, input = job001
-    job003/                        # Predict
-      job.star  run.out  run.err
-      coords/<tomo>.coords         # DeepETPicker-native
-      particles.star               # RELION-style (rlnTomoName, rlnCoordinateX/Y/Z, ...)
-      candidate_coords.star        # input to a later manual-review job
-  Tomograms/ ...                   # read from upstream RELION jobs, never modified
+<project>/DeepETPicker/job001/   Prepare  (tomograms_std, labels, occupancy, coords, dataset.star)
+<project>/DeepETPicker/job002/   Train    (checkpoints/, metrics.csv)
+<project>/DeepETPicker/job003/   Predict  (coords/, particles.star)
 ```
+Directory/category names must follow whatever RELION-US's `job_catalog.CUSTOM_JOBS` uses; check there before fixing them.
 
-Design rules:
-- Inputs are referenced by path from an upstream RELION job (e.g. `Tomograms/jobNNN/tomograms.star`) as well as by plain folder, so no more mandatory `raw_data/` copy convention.
-- Every job is self-describing: `job.star` has the full parameter set, plus input job IDs, so a result can always be traced to its weights and threshold.
-- Re-running creates a new `jobNNN`; nothing is overwritten.
-- One internal `ProjectLayout` class owns every path. No other module concatenates paths.
-- Legacy `pre_config=`/`train_configs=` files remain loadable through a one-way importer; old `base_path` datasets can be opened read-only via `--legacy-layout`.
-
-### 2.2 Code structure
-```
-deepetpicker/
-  core/            # unchanged model/dataset/train/test, only path args refactored
-  project/         # ProjectLayout, job.star read/write, pipeline.star updater, status files
-  io/              # coords readers/writers (.coords/.csv/.txt/.star/.box), RELION STAR
-  jobs/            # preprocess.py train.py predict.py: pure functions (params -> files)
-  cli/             # `deepetpicker preprocess|train|predict|export|serve`
-  web/             # FastAPI backend + frontend (section 2.3)
-```
-Jobs are pure functions taking a typed params object (pydantic) and a `ProjectLayout`, writing logs to files rather than swapping `sys.stdout`. This is the main fix for GUI fragility: the GUI never shares a process with training.
-
-### 2.3 Web GUI
-- **Backend:** FastAPI. Each job is launched as a **subprocess** (`python -m deepetpicker.jobs.train --job-dir ...`), so a CUDA OOM or crash cannot take down the server, stop is `SIGTERM` to the process group, and status comes from the RELION exit-marker files plus `run.out`. Live logs via Server-Sent Events tailing `run.out`.
-- **Endpoints (REST + OpenAPI, which is what makes later RELION-Us integration practical):** `POST /jobs/{type}` (validate params, create `jobNNN`, start), `GET /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/log`, `POST /jobs/{id}/abort`, `GET /tomograms`, `GET /tomograms/{name}/slice?axis=z&i=…` (PNG slice for viewer), `GET/PUT /jobs/{id}/coords/{tomo}` (manual edit).
-- **Frontend:** a small, dependency-light SPA (plain TypeScript + Vite, or htmx). Pages: Project/job list, per-job parameter form generated from the pydantic JSON schema (so CLI, GUI and docs cannot drift), log/progress view, slice viewer with coordinate overlay and manual add/delete (parity with current PyQt viewer).
-- **Integration shape:** run as a stateless service pointed at a project directory (`deepetpicker serve --project DIR --port N`). Auth is left to the host (RELION-Us) at this stage; bind to localhost by default.
-- PyQt GUI is kept in `legacy/` until the web GUI reaches viewer parity, then removed.
+### 2.4 Local workstation now, SLURM later
+Because jobs are plain subprocesses with all state in the job dir, the same command runs locally or via RELION-US's SLURM bridge. Things to keep true now so the SLURM move is free: no hard-coded GPU ids (take `--gpu` / respect `CUDA_VISIBLE_DEVICES`), no absolute paths inside `job_params.json`/`dataset.star` (store project-relative), no interactive prompts, stdout/stderr unbuffered, and `train` resumable from `last.ckpt`.
 
 ## 3. Phases
 
-| Phase | Deliverable | Verifiable how |
-|---|---|---|
-| 0 | Characterization tests + tiny synthetic dataset (one 64³ tomogram, a few particles). Pin a working modern env (`np.float` fix, current torch / lightning) in `pyproject.toml`. | Old pipeline reproduces labels/coords on synthetic data; CPU-only smoke tests in CI |
-| 1 | `ProjectLayout`, `job.star` I/O, legacy-config importer, replace `lstrip` parsing, replace `num_name.csv` with manifest, fix `glob(...)[0]` shape bug | Unit tests on layout and round-trip of config |
-| 2 | Refactor preprocess/train/predict into `jobs/*` + `cli`; predictions written to `jobNNN/` with `particles.star` (RELION-correct columns, real exit markers, `default_pipeline.star` updates); remove bare `except:`; log to files | End-to-end CLI run on synthetic data (CPU, 1 epoch); STAR output parsed back by a reader |
-| 3 | FastAPI backend + job runner + SSE logs + OpenAPI schema | API tests with a fake job; abort test |
-| 4 | Frontend: job forms, logs, slice viewer, manual picking | Playwright smoke test (Chromium is available in this environment) |
-| 5 | Docs: rewrite README around the project layout, one worked example, and a layout diagram; document `job.star` fields and RELION-Us integration notes | Fresh-clone walkthrough on the sample dataset |
-| 6 | Integration with RELION-Us after your testing | Depends on its spec |
+| # | Work | Repo | Done when |
+|---|---|---|---|
+| 0 | Tiny synthetic dataset (64³ tomogram + a few coords), characterization tests of current preprocess/labels/NMS output, working modern environment (`np.float` -> `float`, pin torch/lightning that run on the workstation's CUDA). Re-evaluate the paper's model on SHREC2021/EMPIAR-10045 before/after to quantify any drift. | DeepETPicker | Old pipeline reproduces on synthetic data; baseline numbers recorded |
+| 1 | Package restructure + `ProjectLayout`/`dataset.star` + `job_params.json`; fix items 1-6 in section 4; legacy `pre_config=`/`train_configs=` importer | DeepETPicker | Unit tests; old config files still load |
+| 2 | `prepare` / `train` / `predict` / `export` CLI to the contract above; `metrics.csv`; `particles.star` | DeepETPicker | CPU 1-epoch end-to-end on synthetic data; GPU run on workstation matches Phase-0 baseline |
+| 3 | Prepare/Train/Predict job types, command builders, Progress source, tests in RELION-US's style; batch mode in `deepetpicker_bridge` | RELION-US | Backend pytest + one Playwright job-popup test |
+| 4 | Viewer parity items from section 4 that RELION-US lacks | RELION-US | Parity checklist ticked |
+| 5 | Docs: rewrite DeepETPicker README around job dirs and the RELION-US workflow; README change notes written in the owner's voice | both | Fresh-clone walk-through on the sample dataset |
+| 6 | Remove PyQt GUI (`main.py`, `MainWindow_3D_PP.py`), PyQt5/pyqtgraph pins | DeepETPicker | **Only after every item in section 4 is "covered" or "dropped on purpose"**, signed off by owner |
 
-Each phase is a separate PR to keep review manageable; Phase 1–2 are the risky ones because they touch training/inference paths.
+One PR per phase; Phases 1-2 are the risky ones because they touch the training and inference paths.
 
-## 4. Sub-agents: recommendation
+## 4. Old-GUI behaviour audit (hidden functions to carry over, or drop on purpose)
 
-**Do not parallelize Phases 0–2.** The path contract (`ProjectLayout` + `job.star` schema) is the thing every other piece depends on, the codebase is small (~8k lines), and splitting that work would produce conflicting layouts and re-derivation of the same context in each agent.
+Found by reading `main.py`. This list is the gate for removing the GUI; it should grow as I read the rest of the viewer code and as you use the old GUI.
 
-**Use a few after the contract and API schema are frozen (start of Phase 3):**
-1. *Frontend agent* (worktree-isolated): builds the SPA against the OpenAPI schema and a mock server; independent of core code.
-2. *Test/QA agent*: writes API and Playwright tests and a synthetic dataset generator while backend is implemented.
-3. *Review agent* at the end of Phase 2 (read-only, `code-review`) for adversarial checks of the refactor, especially label/coordinate conventions (x,y,z vs z,y,x ordering, 0 vs 1 origin), which silently corrupt results rather than failing.
+| # | Hidden behaviour | Where | Why it matters | Disposition |
+|---|---|---|---|---|
+| 1 | **Training rewrites `coords/num_name.csv` on disk**, reordering tomograms (train ids first, then val, then the rest; train order is also reversed by `insert(0, ...)`), so the "ids" shown in *Dataset list* change after training starts. `data_split` indices are positions in this reordered file. | `main.py` `train_ok` ~L754-780 | `bin/train_bash.py` computes `data_split` the same way but **does not reorder the csv**, so with the CLI, `--train_set_ids`/`--val_set_ids` appear to select by file position, not by the ids given. Needs confirming by a run; if true, CLI users train on the wrong tomograms without any error. | Fix: select by tomogram name via `dataset.star`; no positional ids, no file rewriting |
+| 2 | Inference **only runs on tomograms in `data_std/`** (normalized during preprocessing), and writes a fresh `num_name.csv` into `data_std/` from `os.listdir` (unsorted; `tomo_format in i` is a substring test, so `x.mrc.bak` matches). | `test_ok` ~L1020-1035, `bin/test_bash.py` | New tomograms must be standardized with the same method before predict, or results degrade silently. Order depends on filesystem. | Predict normalizes its own inputs per `job_params.json`; sorted, exact-suffix matching |
+| 3 | `test.py` reads the **first** tomogram from `glob(tomo_path/*fmt)[0]` for the volume shape regardless of which tomogram is predicted. | `test.py:45` | Wrong shape for any tomogram of a different size. | Fix: per-tomogram shape |
+| 4 | Coordinates are **truncated to integers** on import (`astype(float).astype(int)`), so sub-voxel RELION coordinates lose precision before label generation. | `utils/coord_gen.py` | Systematic up-to-1-voxel shift (toward zero). Matters for small particles at binned scale. | Round, not truncate; document. Decide with owner whether to preserve floats |
+| 5 | Multi-class models use `num_classes + 1` outputs (background channel) with softmax; single class uses sigmoid. Predict derives `mini_dist` from the smallest `ocp_diameter // 2 + 1` and mean-pool NMS size from the largest. | `train_ok`, `test.py` | Easy to break when refactoring params; affects duplicate removal. | Keep behaviour; derive in one function, test it |
+| 6 | Normalization launches one process per tomogram (`Pool(len(dir_list))`) and loads each tomogram fully. | `utils/normalization.py` | Memory blow-up and fork storm on large datasets. | Bounded worker count |
+| 7 | Coordinate-format conversion: picks one class, drops the class column, writes `.star` (1 decimal), `.box` (x, y, z rounded), `.coords` (rounded ints) into `<path>_cls<N>_<fmt>/`. | `convert_ok`, `utils/coordFormatConvert.py` | Users have downstream scripts that expect these folders. `.box` has no box size/centre convention encoded. | `deepetpicker export`; RELION-5 particles.star comes via the bridge |
+| 8 | Dataset/config round trip: *Save/Load configs* repopulate every tab (preprocess params feed the training and inference tabs, including `ocp_diameter` and `gpu_ids`). | `train_saveConfigs`, `test_load_trainConfigs` | Inference silently depends on `ocp_diameter` from preprocessing. | `job_params.json` chains inputs from upstream job |
+| 9 | Stop = injecting an exception into the thread (`stop_thread`) inside the GUI process. | `train_stop`, `test_stop` | Unreliable, can leave GPU memory held. | Process-group kill via RELION-US |
+| 10 | Viewer: Gaussian filter, histogram equalization, label overlay with per-class colours, circle diameter/width, saving a **video (mp4/avi)** of a z-range with ROI crop, XY/ZY/XZ linked views, Up/Down arrow for z. | `main.py` viewer, `utils/colors.py` | RELION-US has linked views and overlay; filters and video export need checking. | Audit RELION-US viewer; add missing or drop on purpose |
+| 11 | Manual picking: double-click **toggles**: within `circle_diameter // 2` of an existing pick it deletes it, otherwise adds. Per-class id and colour. Saves tab-separated `class x y z` to a user-chosen name. | `mouseClicked`, `mpick_save` | RELION-US uses add / right-click delete and writes STAR, with no class id. | Decide behaviour; keep `.coords` export |
 
-Docs (Phase 5) I would write myself, because the README notes should be in your voice.
+Anything else the old GUI does implicitly (e.g. defaults baked into `train_ok`: AdamW, weight decay 0.01, OneCycleLR, Dice loss, `f_maps=[24,48,72,108]`, `use_bg/use_IP/use_coord=True`) must be moved into explicit, recorded parameters in `job_params.json` rather than hidden in the GUI.
 
-## 5. Risks / things I cannot verify from this container
-- No GPU here and torch is not installed; training/inference on real data will need to be validated on your side. I can only run CPU smoke tests on synthetic data.
-- Coordinate convention: RELION 5 tomography STAR coordinates (`rlnCoordinateX/Y/Z`, pixel units, tomogram binning, origin offsets in Å) need to match the specific tomogram job you feed in; the current `coords_to_relion4.py` writes RELION-4 style unbinned voxel coordinates with zeroed origins. Needs checking against the RELION docs, not assumed.
-- Changing torch / lightning versions may shift numerical results from the published model; the checkpoint from the paper should be re-evaluated on the sample datasets (SHREC2021, EMPIAR-10045) before and after.
+## 5. Sub-agents
 
-## 6. Open questions (needed before Phase 1)
-1. **Relion-Us:** I do not know this project and will not guess its API. Is there a repo/spec or doc for how external tools plug in (job launch, status, file conventions)?
-2. Target RELION version for the STAR files (RELION 4 vs 5 tomography)?
-3. Where will the server run (cluster login node behind SSH tunnel vs. a node with its own port)? This decides auth and whether subprocess launch should go through SLURM.
-4. Keep the PyQt GUI in the repo, or drop it once the web GUI works?
-5. Can a trained checkpoint from the original paper and one small test tomogram be shared for regression testing?
+- **Phases 0-2: no.** One person (or agent) should own the path/`dataset.star` contract; it is small enough (~8k lines) that splitting it creates conflicting layouts.
+- **Phase 3-4: yes, two.** The RELION-US job types and the viewer-parity work live in a different repo and only depend on the frozen CLI contract (section 2.1), so a worktree-isolated agent can do them against a stub CLI while Phase 2 finishes.
+- **Review: yes, one read-only agent** after Phase 2 for the audit in section 4 and for coordinate-order bugs (x,y,z vs z,y,x; 0- vs 1-based), which corrupt results without raising errors.
+- Docs stay with me/you so the README notes are in your voice.
+
+## 6. Risks and things I could not check
+- No GPU or torch in the planning container, so training/inference parity must be verified on your workstation.
+- RELION-5 particle coordinate units: RELION-US's bridge treats `rlnCoordinateX/Y/Z` as pixels of the tomogram used, with a binning factor. I have not verified this against the RELION-5 tomography documentation; do that before Phase 2 finalizes `particles.star`.
+- Upgrading torch/lightning (from torch 1.7.1 / lightning 1.1.0) may change results. Hence the Phase-0 baseline.
+- Push access: GitHub write access for this session to `schiracha/DeepETPicker_Sc` currently fails (403), so nothing here is on the remote yet. Read access to `schiracha/relion-us` works; I cannot push there either.
+
+## 7. Open questions
+1. Directory/category names: follow RELION-US's `CUSTOM_JOBS` convention (I will read it in Phase 3), or do you want `DeepETPicker/` fixed now?
+2. Should `predict` also be allowed to write float (sub-voxel) coordinates? Currently integers (centroids cast with `.astype(int)`).
+3. Item 1 in section 4: do you remember whether results you got from the CLI path looked off? A one-tomogram test on the workstation would settle it before I refactor.
+4. Can you share one small tomogram + coords and the published checkpoint for the Phase-0 baseline (or point me at the Zenodo sample set to use)?
+5. Okay to put the RELION-US job types in a branch of `schiracha/relion-us` (needs push access to that repo as well)?
