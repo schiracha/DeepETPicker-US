@@ -12,6 +12,9 @@ def load_module(relpath):
     """Import ``utils/foo.py`` etc. by file path. ``import utils`` pulls in
     torch (utils/__init__.py), which the preprocessing code does not need."""
     path = REPO / relpath
+    cached = sys.modules.get(path.stem)
+    if cached is not None and getattr(cached, "__file__", None) == str(path):
+        return cached      # a second copy would break pickling of its classes (multiprocessing.Pool)
     spec = importlib.util.spec_from_file_location(path.stem, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[path.stem] = mod
