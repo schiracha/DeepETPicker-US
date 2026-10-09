@@ -107,9 +107,14 @@ Anything else the old GUI does implicitly (e.g. defaults baked into `train_ok`: 
 - Upgrading torch/lightning (from torch 1.7.1 / lightning 1.1.0) may change results. Hence the Phase-0 baseline.
 - Push access: GitHub write access for this session to `schiracha/DeepETPicker_Sc` currently fails (403), so nothing here is on the remote yet. Read access to `schiracha/relion-us` works; I cannot push there either.
 
-## 7. Open questions
-1. Directory/category names: follow RELION-US's `CUSTOM_JOBS` convention (I will read it in Phase 3), or do you want `DeepETPicker/` fixed now?
-2. Should `predict` also be allowed to write float (sub-voxel) coordinates? Currently integers (centroids cast with `.astype(int)`).
-3. Item 1 in section 4: do you remember whether results you got from the CLI path looked off? A one-tomogram test on the workstation would settle it before I refactor.
-4. Can you share one small tomogram + coords and the published checkpoint for the Phase-0 baseline (or point me at the Zenodo sample set to use)?
-5. Okay to put the RELION-US job types in a branch of `schiracha/relion-us` (needs push access to that repo as well)?
+## 7. Decisions so far
+- **RELION-US work goes on a branch, never main:** `claude/deepetpicker-jobs` on `schiracha/relion-us` (created from main at 3904d1e; nothing committed yet). Its own PR, separate from this one.
+- **Sub-voxel coordinates: yes.** `get_centroids` (`utils/misc.py:210`) already returns float `skimage.regionprops` centroids of the thresholded blobs; `Coords_All` then casts them with `.astype(int)` (`test.py:101`). `predict` will keep the floats in `coords/` and `particles.star` and round only in `export --fmt box|coords`. RELION-US's bridge already multiplies by a binning factor, so it produces floats anyway. Caveat: I have not confirmed from RELION-5 source that every downstream tomography program reads these columns as doubles, so the first real test is one Extract/refine on the workstation. Float precision is real but limited, since the centroid is of a thresholded blob on the voxel grid.
+- **No data upload.** Tomograms of 2-5 GB stay on the workstation (and the container's proxy blocks Zenodo, so I could not fetch the sample sets either). Validation split:
+  1. In the container: synthetic 64^3 tomograms I generate, CPU only, for unit and end-to-end tests.
+  2. On the workstation: I write a `tools/regression.py` that runs the old and the new path on your real data and prints a small text summary (per-tomogram particle counts, mean nearest-neighbour distance between old and new picks, precision/recall against `.coords` if given). You paste the summary back; no volumes leave the machine.
+
+## 8. Open questions
+1. Directory/category names: follow RELION-US's `CUSTOM_JOBS` convention (I will read it in Phase 3), or fix `DeepETPicker/` now?
+2. Audit item 1 (`num_name.csv` reorder): worth one 2-tomogram CLI run on the workstation before the refactor. `tools/regression.py` will include this check.
+3. Which tomogram set and binning do you normally train on (pixel size, patch/label diameter)? Only needed to choose defaults and the synthetic data scale.
