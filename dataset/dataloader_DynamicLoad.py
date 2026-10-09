@@ -162,7 +162,7 @@ class Dataset_ClsBased(data.Dataset):
                         self.data_shape = gm.data.shape
                         shape_pad = [i + 2 * pad_size for i in shape]
                         try:
-                            temp = np.zeros(shape_pad).astype(np.float)
+                            temp = np.zeros(shape_pad).astype(float)
                         except:
                             temp = np.zeros(shape_pad).astype(np.float32)
                         temp[pad_size:shape_pad[0] - pad_size,
@@ -186,7 +186,7 @@ class Dataset_ClsBased(data.Dataset):
                     shape_pad = [shape[0]]
                     shape_pad.extend([i + 2 * pad_size for i in shape[1:]])
                     try:
-                        temp = np.zeros(shape_pad).astype(np.float)
+                        temp = np.zeros(shape_pad).astype(float)
                     except:
                         temp = np.zeros(shape_pad).astype(np.float32)
                     temp[:, pad_size:shape_pad[1] - pad_size,
@@ -219,7 +219,7 @@ class Dataset_ClsBased(data.Dataset):
                         shape = cm.data.shape
                         shape_pad = [i + 2 * pad_size if i > pad_size else i for i in shape]
                         try:
-                            temp = np.zeros(shape_pad).astype(np.float)
+                            temp = np.zeros(shape_pad).astype(float)
                         except:
                             temp = np.zeros(shape_pad).astype(np.float32)
 
@@ -257,7 +257,7 @@ class Dataset_ClsBased(data.Dataset):
                         shape = cm.data.shape
                         shape_pad = [i + 2 * pad_size for i in shape]
                         try:
-                            temp = np.zeros(shape_pad).astype(np.float)
+                            temp = np.zeros(shape_pad).astype(float)
                         except:
                             temp = np.zeros(shape_pad).astype(np.float32)
                         temp[pad_size:shape_pad[0] - pad_size,
@@ -450,7 +450,7 @@ class Dataset_ClsBased(data.Dataset):
         # print(img.shape, label.shape)
         img = np.array(img)
         try:
-            label = np.array(label).astype(np.float)
+            label = np.array(label).astype(float)
         except:
             label = np.array(label).astype(np.float32)
 
@@ -466,7 +466,7 @@ class Dataset_ClsBased(data.Dataset):
 
         if self.use_paf:
             try:
-                paf_label = np.array(paf_label).astype(np.float).reshape(-1, self.shift * 2, self.shift * 2, self.shift * 2)
+                paf_label = np.array(paf_label).astype(float).reshape(-1, self.shift * 2, self.shift * 2, self.shift * 2)
             except:
                 paf_label = np.array(paf_label).astype(np.float32).reshape(-1, self.shift * 2, self.shift * 2, self.shift * 2)
 

@@ -31,7 +31,7 @@ def test_func(args, stdout=None):
         # load config parameters
         if len(args.configs) > 0:
             with open(args.configs, 'r') as f:
-                cfg = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+                cfg = json.loads(f.read().partition('=')[2])
 
         start_time = time.time()
         args.data_split[-2] = test_idx
@@ -42,9 +42,9 @@ def test_func(args, stdout=None):
         dir_name = dir_list[args.data_split[-2]]
         print(dir_name)
 
-        tomo_file = glob(cfg["tomo_path"] + "/*%s" % cfg["tomo_format"])[0]
-        data_file = mrcfile.open(tomo_file, permissive=True)
-        data_shape = data_file.data.shape
+        tomo_file = os.path.join(cfg["tomo_path"], dir_name + cfg["tomo_format"])
+        with mrcfile.open(tomo_file, permissive=True, header_only=True) as data_file:
+            data_shape = (int(data_file.header.nz), int(data_file.header.ny), int(data_file.header.nx))
         print(data_shape)
         dataset = cfg["dset_name"]
 

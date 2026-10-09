@@ -34,18 +34,18 @@ class UNetExperiment(pl.LightningModule):
 
         if len(args.configs) > 0:
             with open(args.configs, 'r') as f:
-                self.cfg = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+                self.cfg = json.loads(f.read().partition('=')[2])
         else:
             self.cfg = {}
         if len(args.train_configs) > 0:
             with open(args.train_configs, 'r') as f:
-                self.train_cfg = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+                self.train_cfg = json.loads(f.read().partition('=')[2])
         else:
             self.train_cfg = self.cfg
 
         if len(args.val_configs) > 0:
             with open(args.val_configs, 'r') as f:
-                self.val_config = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+                self.val_config = json.loads(f.read().partition('=')[2])
         else:
             self.val_cfg = self.cfg
 

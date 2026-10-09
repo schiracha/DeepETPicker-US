@@ -8,6 +8,7 @@ DeepETPickerHome = dirname(abspath(__file__))
 DeepETPickerHome = os.path.split(DeepETPickerHome)[0]
 sys.path.append(DeepETPickerHome)
 sys.path.append(os.path.split(DeepETPickerHome)[0])
+from deepetpicker.project.params import load_legacy_config
 test = importlib.import_module(".test", package=os.path.split(DeepETPickerHome)[1])
 option = importlib.import_module(f".options.option", package=os.path.split(DeepETPickerHome)[1])
 
@@ -16,8 +17,7 @@ if __name__ == '__main__':
     args = options.gather_options()
 
     # cofig
-    with open(args.train_configs, 'r') as f:
-        cfg = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+    cfg = load_legacy_config(args.train_configs)
 
     # parameters
     args.use_bg = True
@@ -55,8 +55,8 @@ if __name__ == '__main__':
     args.num_classes = train_cls_num
 
     # test_idxs
-    dset_list = np.array(
-        [i[:-(len(i.split('.')[-1]) + 1)] for i in os.listdir(cfg['tomo_path']) if cfg['tomo_format'] in i])
+    dset_list = np.array(sorted(
+        i[:-len(cfg['tomo_format'])] for i in os.listdir(cfg['tomo_path']) if i.endswith(cfg['tomo_format'])))
     dset_num = dset_list.shape[0]
     num_name = np.concatenate([np.arange(dset_num).reshape(-1, 1), dset_list.reshape(-1, 1)], axis=1)
     np.savetxt(os.path.join(cfg['tomo_path'], 'num_name.csv'),

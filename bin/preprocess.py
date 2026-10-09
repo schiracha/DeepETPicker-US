@@ -8,6 +8,7 @@ DeepETPickerHome = dirname(abspath(__file__))
 DeepETPickerHome = os.path.split(DeepETPickerHome)[0]
 sys.path.append(DeepETPickerHome)
 sys.path.append(os.path.split(DeepETPickerHome)[0])
+from deepetpicker.project.params import load_legacy_config
 coords2labels = importlib.import_module(".utils.coords2labels", package=os.path.split(DeepETPickerHome)[1])
 coord_gen = importlib.import_module(f".utils.coord_gen", package=os.path.split(DeepETPickerHome)[1])
 norm = importlib.import_module(f".utils.normalization", package=os.path.split(DeepETPickerHome)[1])
@@ -17,8 +18,7 @@ if __name__ == "__main__":
     options = option.BaseOptions()
     args = options.gather_options()
 
-    with open(args.pre_configs, 'r') as f:
-        pre_config = json.loads(''.join(f.readlines()).lstrip('pre_config='))
+    pre_config = load_legacy_config(args.pre_configs)
 
     # initial coords
     coord_gen.coords_gen_show(args=(pre_config["coord_path"],

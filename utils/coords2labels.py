@@ -39,7 +39,7 @@ class Coord_to_Label():
                                            self.label_type + str(self.label_diameter[0]))
         os.makedirs(self.label_path, exist_ok=True)
 
-        self.dir_list = [i[:-len(self.coord_format)] for i in os.listdir(self.coord_path) if self.coord_format in i]
+        self.dir_list = sorted(i[:-len(self.coord_format)] for i in os.listdir(self.coord_path) if i.endswith(self.coord_format))
         self.names = [i + self.tomo_format for i in self.dir_list]  # if self.tomo_format not in i else i
 
     def single_handle(self, i):
@@ -56,10 +56,7 @@ class Coord_to_Label():
         #                            (2 * r + 1, 2 * r + 1, 2 * r + 1), dtype=int).astype(int)
 
         z_max, y_max, x_max = data_file.data.shape
-        try:
-            label_data = np.zeros(data_file.data.shape, dtype=np.float)
-        except:
-            label_data = np.zeros(data_file.data.shape, dtype=np.float32)
+        label_data = np.zeros(data_file.data.shape, dtype=np.float32)  # class indices; float64 would be 2x the memory for nothing
 
         for pos_idx, a_pos in enumerate(label_positions):
             if self.num_cls == 1 and len(a_pos) == 3:
@@ -124,7 +121,7 @@ class Coord_to_Label():
         if len(self.dir_list) == 1:
             self.single_handle(0)
         else:
-            with Pool(len(self.dir_list)) as p:
+            with Pool(max(1, min(len(self.dir_list), os.cpu_count() or 1, 4))) as p:
                 p.map(self.single_handle, np.arange(len(self.dir_list)).tolist())
 
 
@@ -195,10 +192,7 @@ class Coord_to_Label_v1():
             template = gaussian3D((dim, dim, dim), dim)
 
             z_max, y_max, x_max = data_file.data.shape
-            try:
-                label_data = np.zeros(data_file.data.shape, dtype=np.float)
-            except:
-                label_data = np.zeros(data_file.data.shape, dtype=np.float32)
+            label_data = np.zeros(data_file.data.shape, dtype=np.float32)
 
             for pos_idx, a_pos in enumerate(label_positions):
                 if self.num_cls == 1 and len(a_pos) == 3:

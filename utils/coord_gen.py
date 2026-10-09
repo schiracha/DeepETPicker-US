@@ -21,10 +21,9 @@ def coords_gen(coord_path, coord_format, base_dir):
         with open(os.path.join(coord_path, dir), 'r') as f:
             for idx, item in enumerate(f):
                 data.append(item.rstrip('\n').split())
-        try:
-            data = np.array(data).astype(np.float).astype(int)
-        except:
-            data = np.array(data).astype(np.float32).astype(int)
+        # round, don't truncate: the old astype(int) shifted every coordinate
+        # towards zero by up to one voxel
+        data = np.rint(np.array(data).astype(np.float64)).astype(int)
 
         np.savetxt(os.path.join(base_dir, "coords", dir),
                    data, delimiter='\t', newline="\n", fmt="%s")
@@ -43,12 +42,9 @@ def coords_gen(coord_path, coord_format, base_dir):
 
     # gen num_name.csv
     num_name = np.array([num_all]).transpose()
-    try:
-        df = pd.DataFrame(num_name).astype(np.float)
-    except:
-        df = pd.DataFrame(num_name).astype(np.float32)
-    df['dir_names'] = np.array([dir_names]).transpose()
-    df['idx'] = np.arange(len(dir_names)).reshape(-1, 1)
+    df = pd.DataFrame(num_name).astype(np.float64)  # kept as float: the file reads "56.0" and readers split on '.'
+    df['dir_names'] = dir_names              # 1-D: a (N, 1) array is rejected by pandas >= 3
+    df['idx'] = np.arange(len(dir_names))
     df.to_csv(os.path.join(base_dir, "coords", "num_name.csv"), sep='\t', header=False, index=False)
 
 
@@ -64,9 +60,12 @@ def coords_gen_show(args):
         coords_gen(coord_path, coord_format, base_dir)
         print('Coord generation finished!')
         print('*' * 100)
-    except:
-        stdout.flush()
-        stdout.write('Coordinates Generation Exception!')
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        if stdout is not None:
+            stdout.flush()
+            stdout.write('Coordinates Generation Exception!')
         print('*' * 100)
         return 0
 
