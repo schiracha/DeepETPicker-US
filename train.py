@@ -327,14 +327,18 @@ def train_func(args, stdout=None):
         sys.stderr = stdout
 
     args.pad_size = args.pad_size[0]
+    out_dir = getattr(args, 'out_dir', None)     # set by `deepetpicker train`; None = old behaviour
+    ckpt_kwargs = {}
+    if out_dir:
+        ckpt_kwargs = dict(dirpath=os.path.join(out_dir, 'checkpoints'), filename='epoch{epoch:03d}', save_last=True)
     if 'test' in args.test_mode:
         checkpoint_callback = ModelCheckpoint(save_top_k=1,
                                               monitor=f'cls_pr_alpha{args.prf1_alpha:.1f}' if args.num_classes == 1 else 'cls_f1',
-                                              mode='max')
+                                              mode='max', **ckpt_kwargs)
     else:
         checkpoint_callback = ModelCheckpoint(save_top_k=1,
                                               monitor='val_loss',
-                                              mode='min')
+                                              mode='min', **ckpt_kwargs)
 
     model = UNetExperiment(args)
     logger_name = "{}_{}_BlockSize{}_{}Loss_MaxEpoch{}_bs{}_lr{}_IP{}_bg{}_coord{}_Softmax{}_{}_{}_TN{}".format(
@@ -344,17 +348,24 @@ def train_func(args, stdout=None):
         int(args.use_IP), int(args.use_bg), int(args.use_coord),
         int(args.use_softmax), args.norm, args.others, args.sel_train_num)
 
-    os.makedirs(f"{model.train_cfg['base_path']}/runs/{model.train_cfg['dset_name']}", exist_ok=True)
-    tb_logger = loggers.TensorBoardLogger(f"{model.train_cfg['base_path']}/runs/{model.train_cfg['dset_name']}",
-                                          name=logger_name)
-    lr_monitor = LearningRateMonitor(logging_interval='step')
+    callbacks = [LearningRateMonitor(logging_interval='step')]
+    if out_dir:
+        from deepetpicker.torch_support import MetricsCSV
+        os.makedirs(os.path.join(out_dir, 'logs'), exist_ok=True)
+        tb_logger = loggers.TensorBoardLogger(os.path.join(out_dir, 'logs'), name='tb')
+        callbacks.append(MetricsCSV(os.path.join(out_dir, 'metrics.csv')))
+    else:
+        os.makedirs(f"{model.train_cfg['base_path']}/runs/{model.train_cfg['dset_name']}", exist_ok=True)
+        tb_logger = loggers.TensorBoardLogger(f"{model.train_cfg['base_path']}/runs/{model.train_cfg['dset_name']}",
+                                              name=logger_name)
+    lr_monitor = callbacks[0]
 
     runner = Trainer(min_epochs=min(50, args.max_epoch),
                      max_epochs=args.max_epoch,
                      logger=tb_logger,
                      gpus=args.gpu_id,
                      checkpoint_callback=checkpoint_callback,
-                     callbacks=[lr_monitor],
+                     callbacks=callbacks,
                      accelerator='dp',
                      precision=32,
                      profiler=True,
@@ -364,6 +375,9 @@ def train_func(args, stdout=None):
 
     try:
         runner.fit(model)
+        if out_dir:
+            from deepetpicker.torch_support import publish_best
+            publish_best(checkpoint_callback, os.path.join(out_dir, 'checkpoints'))
         print('*' * 100)
         print('Training Finished')
         print(f'Training pid:{os.getpid()}')
@@ -375,6 +389,8 @@ def train_func(args, stdout=None):
         return os.getpid()
     except:
         torch.cuda.empty_cache()
+        if stdout is None:
+            raise      # command line: fail loudly (this used to swallow the error and exit 0)
         if stdout is not None:
             stdout.flush()
             stdout.write('Training Exception!')

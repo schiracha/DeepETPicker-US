@@ -91,6 +91,10 @@ Found by reading `main.py`. This list is the gate for removing the GUI; it shoul
 | 9 | Stop = injecting an exception into the thread (`stop_thread`) inside the GUI process. | `train_stop`, `test_stop` | Unreliable, can leave GPU memory held. | Process-group kill via RELION-US |
 | 10 | Viewer: Gaussian filter, histogram equalization, label overlay with per-class colours, circle diameter/width, saving a **video (mp4/avi)** of a z-range with ROI crop, XY/ZY/XZ linked views, Up/Down arrow for z. | `main.py` viewer, `utils/colors.py` | RELION-US has linked views and overlay; filters and video export need checking. | Audit RELION-US viewer; add missing or drop on purpose |
 | 11 | Manual picking: double-click **toggles**: within `circle_diameter // 2` of an existing pick it deletes it, otherwise adds. Per-class id and colour. Saves tab-separated `class x y z` to a user-chosen name. | `mouseClicked`, `mpick_save` | RELION-US uses add / right-click delete and writes STAR, with no class id. | Decide behaviour; keep `.coords` export |
+| 12 | The dataloader repeats every training row whose **first column equals 15** 13 times (`dataloader_DynamicLoad.py` ~L283). That is a SHREC2021 hack for class 15. | `dataset/dataloader_DynamicLoad.py` | For a single-class dataset with 3-column `x y z` files, any particle with x = 15 is silently oversampled 13x. | `prepare` always writes 4 columns (class first), so it cannot trigger on x. The class-15 rule itself is untouched and should become an explicit option |
+| 13 | `train_func` swallowed every training exception (bare `except:`) and returned normally. | `train.py` | `bin/train_bash.py` exited 0 after a crash. | Re-raised when run from the command line (no GUI stdout) |
+| 14 | Even label/occupancy diameters crash label generation with a broadcasting error (template has `dim` voxels, window `2*int(dim/2)+1`). | `utils/coords2labels.py` | All sample configs use odd diameters, so it never showed up. | `prepare` rejects even diameters up front; `units.suggest_diameters` forces odd |
+| 15 | Overlapping particles: a later particle's window overwrites every non-zero voxel it covers, including a neighbour's label. | `utils/coords2labels.py` | Changes multi-class training labels in crowded regions. Models depend on it. | Kept bit-for-bit (tested against the old class); worth a deliberate decision later |
 
 Anything else the old GUI does implicitly (e.g. defaults baked into `train_ok`: AdamW, weight decay 0.01, OneCycleLR, Dice loss, `f_maps=[24,48,72,108]`, `use_bg/use_IP/use_coord=True`) must be moved into explicit, recorded parameters in `job_params.json` rather than hidden in the GUI.
 
@@ -124,9 +128,35 @@ Not done / not verifiable here: anything importing torch (`train.py`, `test.py`,
 | 2.1 A | 3 | 6.3 A | 24 voxels (particle 25, label 13) | in range |
 So 2.1 A data at bin 3 suits DeepETPicker directly, while RELION's ~10 A/px initial processing would be bin 5 (10.5 A). Picking and RELION need not use the same binning: picks are rescaled by `coordinate_scale(picking_px, relion_px)` (6.3 -> 10.5 is x0.6), the same factor as RELION-US's `binning_factor`. For the 3.12 A set at bin 3 the particle is below the README's recommended size; bin 2 for picking is worth testing. These ranges come from the README and sample configs, not from a benchmark.
 
+## 6c. Status (Phase 2, this PR)
+Commands (run from the repository checkout, after `pip install -e .` or with `python -m deepetpicker`):
+
+```bash
+deepetpicker prepare --output_dir P/DeepETPickerPrepare/job001 --tomo_dir RAW --coords_dir RAW \
+    --pixel_size 6.3 --particle_diameter_A 150          # or --label_diameter 13 --ocp_diameter 25
+deepetpicker train   --output_dir P/DeepETPickerTrain/job002 --prepare_job P/DeepETPickerPrepare/job001 \
+    --val_tomo TS_002 --gpu 0
+deepetpicker predict --output_dir P/DeepETPickerPredict/job003 --train_job P/DeepETPickerTrain/job002 \
+    --tomo_dir NEW_TOMOS --relion_scale 0.6 [--refine_centroids]
+deepetpicker export  --coords_dir P/DeepETPickerPredict/job003/coords --fmt star --output_dir OUT --cls 1
+deepetpicker compare --a OLD_Coords_All --b P/DeepETPickerPredict/job003/coords --truth RAW --tol 5
+```
+Tested here (torch-free, 75 tests): `prepare` reproduces the old standardized tomograms, labels and occupancy maps exactly (including the multi-class overlap behaviour); the train and predict *inputs* (legacy config, `coords_index/` symlinks, `num_name.csv`, `data_split`, normalized inference inputs, `particles.star`) and that the Prepare job is never written to; argument Namespaces for `train.py`/`test.py` (an AST check that every `args.*` and `cfg[...]` the legacy code reads is provided); export formats byte-identical to the old converter; the refinement function; `compare`.
+
+**Not run here (needs torch, pytorch-lightning 1.1.0 and a GPU):** `train.py` (job-directory checkpoints, `metrics.csv`, `best.ckpt` copy, error propagation), `test.py` (job-directory outputs, refinement hook), and the real `train`/`predict` commands. Both files are only byte-compiled. In particular the `ModelCheckpoint(dirpath=…, filename=…)` arguments are written for lightning 1.1 from memory of its API.
+
+### Workstation check (you run, then paste the output)
+1. `python -m pytest tests -q` in the checkout (should say 75 passed; it needs no GPU).
+2. Old vs new on one annotated tomogram you already have a trained model for:
+   - old: your usual GUI/bash `Coords_All` folder;
+   - new: `prepare` -> `train` (a few epochs is enough for a smoke test) -> `predict` on the same tomograms;
+   - `deepetpicker compare --a <old Coords_All> --b <new coords> --truth <your .coords> --tol 5`. Expect near-total agreement if you reuse the old *checkpoint* with `--model`; a freshly trained model will differ.
+3. A `--refine_centroids` run next to a plain one, and `compare` the two (median shift should be well under a voxel).
+4. Check `train` prints one `epoch=… train_loss=… val_loss=…` line per epoch, and that `checkpoints/best.ckpt`, `last.ckpt`, `metrics.csv` exist.
+
 ## 7. Decisions so far
 - **RELION-US work goes on a branch, never main:** `claude/deepetpicker-jobs` on `schiracha/relion-us` (created from main at 3904d1e; nothing committed yet). Its own PR, separate from this one.
-- **Sub-voxel coordinates: yes.** `get_centroids` (`utils/misc.py:210`) already returns float `skimage.regionprops` centroids of the thresholded blobs; `Coords_All` then casts them with `.astype(int)` (`test.py:101`). `predict` will keep the floats in `coords/` and `particles.star` and round only in `export --fmt box|coords`. RELION-US's bridge already multiplies by a binning factor, so it produces floats anyway. Caveat: I have not confirmed from RELION-5 source that every downstream tomography program reads these columns as doubles, so the first real test is one Extract/refine on the workstation. Float precision is real but limited, since the centroid is of a thresholded blob on the voxel grid.
+- **Sub-voxel coordinates: wanted, but they did not exist, and I got this wrong earlier.** I said `get_centroids` already returned float centroids that `Coords_All` then truncated. That function belongs to the evaluation path. The inference path (`test.py`) takes the maximum of the mean-pooled binary prediction (`_nms_v2`), which is an integer voxel, and `de_dup` only chooses among such voxels, so the predictions were always integers. Phase 2 therefore adds an opt-in `--refine_centroids` (`deepetpicker/refine.py`): the centre of mass of the binary prediction in a cube of about one particle radius around each peak. It is off by default, unit-tested on synthetic spheres (recovers a float centre to within 0.2 voxel), but not yet validated on real picks. Float coordinates are carried end to end (native `.coords`, `particles.star`, `export`), and RELION-US's bridge already multiplies by a binning factor, so floats are normal there. I have not confirmed from RELION-5 source that every downstream program reads those columns as doubles; the first real test is one Extract job.
 - **No data upload.** Tomograms of 2-5 GB stay on the workstation (and the container's proxy blocks Zenodo, so I could not fetch the sample sets either). Validation split:
   1. In the container: synthetic 64^3 tomograms I generate, CPU only, for unit and end-to-end tests.
   2. On the workstation: I write a `tools/regression.py` that runs the old and the new path on your real data and prints a small text summary (per-tomogram particle counts, mean nearest-neighbour distance between old and new picks, precision/recall against `.coords` if given). You paste the summary back; no volumes leave the machine.
