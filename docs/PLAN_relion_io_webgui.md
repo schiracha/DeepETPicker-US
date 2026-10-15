@@ -96,6 +96,8 @@ Found by reading `main.py`. This list is the gate for removing the GUI; it shoul
 | 14 | Even label/occupancy diameters crash label generation with a broadcasting error (template has `dim` voxels, window `2*int(dim/2)+1`). | `utils/coords2labels.py` | All sample configs use odd diameters, so it never showed up. | `prepare` rejects even diameters up front; `units.suggest_diameters` forces odd |
 | 15 | Overlapping particles: a later particle's window overwrites every non-zero voxel it covers, including a neighbour's label. | `utils/coords2labels.py` | Changes multi-class training labels in crowded regions. Models depend on it. | Kept bit-for-bit (tested against the old class); worth a deliberate decision later |
 
+| 16 | Inference with a model that flags (almost) every voxel: `test.py`'s `_nms_v2` has no cap on candidate peaks (the validation `_nms_v2` in `train.py` has: 2000), it loops over them in Python, and `de_dup` is quadratic. | `test.py`, `utils/misc.py:de_dup` | Found on a real run: a 3-epoch model (val_precision 0.012) turned a 344x1376x1376 tomogram into an ~80 minute prediction that would then have stalled in `de_dup`. | Batches with more than 2000 candidates are skipped, counted, and reported in a warning (also in the legacy path) |
+
 Anything else the old GUI does implicitly (e.g. defaults baked into `train_ok`: AdamW, weight decay 0.01, OneCycleLR, Dice loss, `f_maps=[24,48,72,108]`, `use_bg/use_IP/use_coord=True`) must be moved into explicit, recorded parameters in `job_params.json` rather than hidden in the GUI.
 
 ## 5. Sub-agents

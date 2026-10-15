@@ -276,3 +276,40 @@ def test_resolved_record_agrees_with_prepare_training_inputs(prepared):
     _, split, order = prepare_training_inputs(tj, TrainParams(prepare_job=str(job.root), val_tomo="TS_001"))
     r = resolved_record(order, split)
     assert r["train_tomos"] == ["TS_000"] and r["val_tomo"] == "TS_001"
+
+
+def test_scale_flags_accept_ratios_of_pixel_sizes():
+    from deepetpicker.cli import build_parser
+    ap = build_parser()
+    ns = ap.parse_args(["predict", "--output_dir", "o", "--train_job", "t", "--tomo_dir", "d", "--relion_scale", "10/3.12"])
+    assert ns.relion_scale == pytest.approx(10 / 3.12)
+    assert ap.parse_args(["predict", "--output_dir", "o", "--train_job", "t", "--tomo_dir", "d",
+                          "--relion_scale", "0.6"]).relion_scale == 0.6
+    assert ap.parse_args(["export", "--coords_dir", "c", "--output_dir", "o", "--fmt", "box",
+                          "--scale", "6.3/10.5"]).scale == pytest.approx(0.6)
+    for bad in ("10/0", "abc", "-2", "0", "1/x", "nan"):
+        with pytest.raises(SystemExit):
+            ap.parse_args(["predict", "--output_dir", "o", "--train_job", "t", "--tomo_dir", "d", "--relion_scale", bad])
+
+
+def test_prepare_name_mismatch_names_the_tomograms_and_the_nearest(raw_data, tmp_path):
+    raw, _ = raw_data
+    (raw / "TS_000_spheres.coords").write_text("1\t5\t5\t5\n")
+    with pytest.raises(ValueError) as e:
+        run_prepare(JobDir(tmp_path / "j"), PrepareParams(tomo_dir=str(raw), coords_dir=str(raw),
+                                                          label_diameter=9, ocp_diameter="11"))
+    msg = str(e.value)
+    assert "TS_000_spheres" in msg and "nearest tomogram: 'TS_000'" in msg
+    assert "Tomograms found: ['TS_000', 'TS_001', 'TS_002']" in msg
+
+
+def test_metrics_log_header_covers_columns_that_appear_later(tmp_path):
+    from deepetpicker.metrics import MetricsLog
+    log = MetricsLog(tmp_path / "metrics.csv")
+    log.add({"epoch": 0, "val_loss": 0.9})
+    log.add({"epoch": 1, "val_loss": 0.8, "train_loss": 0.85})      # train_loss only from the second epoch on
+    import csv
+    rows = list(csv.DictReader(open(tmp_path / "metrics.csv")))
+    assert [r["epoch"] for r in rows] == ["0", "1"] and rows[0]["train_loss"] == "" and rows[1]["train_loss"] == "0.85"
+    assert not (tmp_path / "metrics.csv.tmp").exists()
+    assert log.line({"epoch": 3, "val_loss": 0.5}).startswith("\nepoch=3 val_loss=0.5")

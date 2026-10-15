@@ -87,7 +87,15 @@ def run_prepare(job: JobDir, params: PrepareParams) -> Dataset:
     tomos, coords = _tomograms(p), _coords(p)
     orphans = sorted(set(coords) - set(tomos))
     if orphans:
-        raise ValueError(f"coordinates for tomograms that were not found: {orphans}")
+        import difflib
+        hints = []
+        for o in orphans:
+            near = difflib.get_close_matches(o, list(tomos), n=1, cutoff=0.6) or \
+                [t for t in tomos if t in o or o in t][:1]
+            hints.append(f"{o!r}" + (f" (nearest tomogram: {near[0]!r})" if near else ""))
+        raise ValueError(
+            f"no tomogram for the coordinates of: {', '.join(hints)}. A coordinate file must have the same name as "
+            f"its tomogram (<name>.coords for <name>.mrc). Tomograms found: {sorted(tomos)}")
     if not coords:
         raise ValueError("no coordinates found: at least one annotated tomogram is needed to prepare training data")
     ocp = [int(v) for v in str(p.ocp_diameter).split(",")]

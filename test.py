@@ -91,6 +91,12 @@ def test_func(args, stdout=None):
                             if args.meanPool_NMS:
                                 coords_out = torch.cat(epoch_output, dim=0).detach().cpu().numpy()
                                 print('coords_out:', coords_out.shape)
+                                if getattr(args, '_flooded_batches', 0):
+                                    print(f"warning: {args._flooded_batches} batch(es) had more than 2000 candidate "
+                                          f"peaks and were skipped: the model marks almost everything as particle, "
+                                          f"which usually means it is under-trained (check val_precision in "
+                                          f"metrics.csv). Picks from those batches are missing.", flush=True)
+                                    args._flooded_batches = 0
                                 if args.de_duplication:
                                     centroids = de_dup(coords_out, args)
                                 if out_dir_job:
@@ -185,6 +191,13 @@ def test_func(args, stdout=None):
                         hmax = maxPool(hmax)
                         keep = ((hmax == pred).float()) * ((pred > 0.1).float())
                         coords = keep.nonzero()  # [N, 5]
+                        if coords.shape[0] > 2000:
+                            # Same guard as the validation _nms_v2 in train.py. Thousands of candidate peaks in one
+                            # batch means the network flags (nearly) everything -- in practice an under-trained
+                            # model. Handling them one by one here, and then de-duplicating the pile in de_dup
+                            # (quadratic), takes hours; skip the batch and say so.
+                            args._flooded_batches = getattr(args, '_flooded_batches', 0) + 1
+                            return torch.zeros([0, 5]).cuda()
                         coords = coords[coords[:, 2] >= args.pad_size[0]]
                         coords = coords[coords[:, 2] <= args.block_size - args.pad_size[0]]
                         coords = coords[coords[:, 3] >= args.pad_size[0]]

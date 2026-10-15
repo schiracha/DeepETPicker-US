@@ -27,7 +27,7 @@ Give the tomograms as `--tomo_dir` **or** `--tomo_star`, and the known particles
 | `--coords_dir` | — | folder of `<name>.coords` files, columns `class x y z` (this OR `--coords_star`) |
 | `--coords_star` | — | RELION particles STAR file with `rlnTomoName` and `rlnCoordinateX/Y/Z` (this OR `--coords_dir`) |
 | `--coords_ext` | `.coords` | coordinate file extension for `--coords_dir` |
-| `--coords_scale` | `1.0` | multiply coordinates by this to reach the tomograms' voxel grid |
+| `--coords_scale` | `1.0` | multiply coordinates by this to reach the tomograms' voxel grid; a number or a ratio of pixel sizes such as `10.5/6.3` |
 | `--num_cls` | `1` | number of particle classes; class ids must be 1..N |
 | `--label_type` | `gaussian` | shape painted at each particle: `gaussian`, `sphere` or `cubic` |
 | `--label_diameter` | — | weak-label diameter in voxels, odd |
@@ -81,7 +81,7 @@ Picks particles with a trained model. Needs the same environment as `train`.
 | `--seg_thresh` | `0.5` | probability above which a voxel counts as particle |
 | `--gpu` | `0` | comma-separated GPU ids |
 | `--refine_centroids` | off | experimental sub-voxel refinement, see below |
-| `--relion_scale` | `1.0` | picking-grid voxels → RELION tomogram pixels, applied to `particles.star` only |
+| `--relion_scale` | `1.0` | picking-grid voxels → RELION tomogram pixels, applied to `particles.star` only: picking pixel size / RELION tomogram pixel size, as a number or a ratio such as `10/3.12` |
 
 By default a pick is a whole voxel: the maximum of the smoothed binary prediction. With `--refine_centroids` each pick moves to the centre of mass of the binary prediction in a cube of about one particle radius around it, which gives fractional coordinates. It is a heuristic, exact for a symmetric blob inside the cube and biased towards the peak voxel if the cube cuts through the blob, and has not been validated against ground truth.
 
@@ -95,7 +95,7 @@ Converts a folder of native `.coords` into other formats.
 | `--output_dir` | **required** | where to write the converted files |
 | `--fmt` | **required** | `star` (RELION-3 style, one file per tomogram), `box` (EMAN2), `coords` (rounded integers), or `relion5` (one coordinate-only `particles.star`) |
 | `--cls` | all | keep only this class id (the class column is then dropped, as the old interface did) |
-| `--scale` | `1.0` | multiply x y z by this |
+| `--scale` | `1.0` | multiply x y z by this; a number or a ratio such as `10/3.12` |
 
 `star`, `box` and `coords` reproduce the old converter byte for byte (tested), so scripts that read its output keep working. `relion5` is not the 13-column RELION-4 table that `utils/coords_to_relion4.py` wrote: it has only the columns listed under `particles.star` below.
 
@@ -190,7 +190,7 @@ It has no optics block, angles or origins; RELION-US's **Import from DeepETPicke
 
 ### `metrics.csv` and the progress line
 
-`metrics.csv` has an `epoch` column and every scalar metric the model logged (`train_loss`, `val_loss`, `val_precision`, `val_recall`, `val_f1`, `val_iou`), one row after each validation pass. `train_loss` is the latest completed value, so it can lag the validation columns by an epoch. The same row is printed as one line, `epoch=3 train_loss=0.123 val_loss=0.234 …`, and `loss_full.png` (train and validation loss) is redrawn at the same time, atomically, which is what RELION-US shows on the Progress tab.
+`metrics.csv` has an `epoch` column and every scalar metric the model has logged (`train_loss`, `val_loss`, `val_precision`, `val_recall`, `val_f1`, `val_iou`), one row after each training epoch (not for the validation sanity check that lightning runs before epoch 0). The same row is printed on its own line, `epoch=3 train_loss=0.123 val_loss=0.234 …`, and `loss_full.png` (train and validation loss) is redrawn at the same time, atomically, which is what RELION-US shows on the Progress tab.
 
 ## Pixel size, binning and diameters
 
@@ -219,6 +219,13 @@ You do not have to pick on the grid RELION uses. Picks made on a 6.3 Å/px tomog
 | the interface's "coordinate format conversion" | `deepetpicker export` |
 | `utils/coords_to_relion4.py` | `deepetpicker export --fmt relion5` (coordinate-only, not the 13-column table) |
 | the interface's visualisation and manual picking | RELION-US's viewer and picker |
+
+## Troubleshooting
+
+- **`no tomogram for the coordinates of: 'X' (nearest tomogram: 'Y')`.** A coordinate file must have the same name as its tomogram: `<name>.coords` for `<name>.mrc`. Rename one of them (or copy to a working folder with matching names). The message lists the tomograms it found.
+- **`predict` is very slow, or finds nothing, after a short training run.** After only a few epochs the network marks almost every voxel as particle (look at `val_precision` in `metrics.csv`: a value near 0.01 with `val_recall` near 0.8 is exactly that). Every voxel then becomes a candidate peak. Batches with more than 2000 candidates are now skipped and counted in a warning, instead of being worked through one by one, and the warning says so. Train longer (60 epochs is the default for a reason) before judging the picks.
+- **Training and validation on the same tomogram.** With a single annotated tomogram `train` trains and validates on it, so `val_*` numbers say nothing about how well the model generalises.
+- **`--relion_scale 10/3.12`** is accepted: write the two pixel sizes instead of doing the division.
 
 ## Not done, not verified
 

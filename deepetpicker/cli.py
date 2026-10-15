@@ -22,6 +22,19 @@ def _gpus(s):
     return [int(x) for x in _csv(s)]
 
 
+def _scale(s):
+    """A positive number, or a ratio such as ``10/3.12`` (pixel size over pixel size)."""
+    import math
+    try:
+        a, sep, b = s.strip().partition("/")
+        v = float(a) / float(b) if sep else float(a)
+    except (ValueError, ZeroDivisionError):
+        raise argparse.ArgumentTypeError(f"expected a number or a ratio such as 10/3.12, got {s!r}")
+    if not math.isfinite(v) or v <= 0:
+        raise argparse.ArgumentTypeError(f"must be a positive number or ratio, got {s!r}")
+    return v
+
+
 def _inputs(p, tomos=True, coords=False):
     if tomos:
         p.add_argument("--tomo_dir", help="folder of <name>.mrc tomograms (this OR --tomo_star)")
@@ -35,8 +48,9 @@ def _inputs(p, tomos=True, coords=False):
         p.add_argument("--coords_star", help="RELION particles STAR file with rlnTomoName and rlnCoordinateX/Y/Z "
                                              "(this OR --coords_dir)")
         p.add_argument("--coords_ext", default=".coords", help="coordinate file extension for --coords_dir")
-        p.add_argument("--coords_scale", type=float, default=1.0,
-                       help="multiply coordinates by this to reach the tomograms' voxel grid")
+        p.add_argument("--coords_scale", type=_scale, default=1.0,
+                       help="multiply coordinates by this to reach the tomograms' voxel grid; a number or a ratio "
+                            "of pixel sizes such as 10.5/6.3")
 
 
 def build_parser():
@@ -83,8 +97,9 @@ def build_parser():
     p.add_argument("--seg_thresh", type=float, default=0.5, help="probability above which a voxel counts as particle")
     p.add_argument("--gpu", type=_gpus, default=[0], dest="gpu_ids", help="comma-separated GPU ids, e.g. 0 or 0,1")
     p.add_argument("--refine_centroids", action="store_true", help="experimental sub-voxel refinement")
-    p.add_argument("--relion_scale", type=float, default=1.0,
-                   help="picking-grid voxels -> RELION tomogram pixels, applied to particles.star only")
+    p.add_argument("--relion_scale", type=_scale, default=1.0,
+                   help="picking-grid voxels -> RELION tomogram pixels, applied to particles.star only: picking "
+                        "pixel size / RELION tomogram pixel size, as a number or a ratio such as 10/3.12")
 
     p = sub.add_parser("export", help="convert .coords to star / box / coords / RELION-5 particles.star")
     p.add_argument("--coords_dir", required=True, help="folder of <name>.coords files (e.g. a predict job's coords/)")
@@ -93,7 +108,8 @@ def build_parser():
                    help="star: RELION-3 style; box: EMAN2; coords: rounded integers; "
                         "relion5: one coordinate-only particles.star")
     p.add_argument("--cls", type=int, help="keep only this class id (the class column is then dropped)")
-    p.add_argument("--scale", type=float, default=1.0, help="multiply x y z by this")
+    p.add_argument("--scale", type=_scale, default=1.0,
+                   help="multiply x y z by this; a number or a ratio such as 10/3.12")
     p = sub.add_parser("compare", help="compare two folders of .coords (old vs new, or picks vs truth)")
     p.add_argument("--a", required=True, help="first folder of .coords (e.g. the old Coords_All)")
     p.add_argument("--b", required=True, help="second folder of .coords (e.g. a predict job's coords/)")
