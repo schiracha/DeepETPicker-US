@@ -258,3 +258,21 @@ def test_loss_plot_is_written_atomically(tmp_path):
     assert not (tmp_path / "loss_full.png.tmp").exists()
     csv_path.write_text("epoch,val_f1\n0,0.1\n")
     assert plot_loss(csv_path, tmp_path / "none.png") is False and not (tmp_path / "none.png").exists()
+
+
+def test_resolved_record_names_what_a_defaulted_run_really_used():
+    from deepetpicker.jobs.train import resolved_record
+    r = resolved_record(["A", "B", "C"], [0, 1, 1, 2, 1, 2])
+    assert r == {"train_tomos": ["A"], "val_tomo": "B", "order": ["A", "B", "C"], "data_split": [0, 1, 1, 2, 1, 2]}
+    # validation tomogram also in the training set: the train range includes it
+    assert resolved_record(["A", "B", "C"], [0, 2, 1, 2, 1, 2])["train_tomos"] == ["A", "B"]
+
+
+def test_resolved_record_agrees_with_prepare_training_inputs(prepared):
+    from deepetpicker.jobs.train import resolved_record
+    job, _, tmp = prepared
+    tj = JobDir(tmp / "t")
+    tj.root.mkdir()
+    _, split, order = prepare_training_inputs(tj, TrainParams(prepare_job=str(job.root), val_tomo="TS_001"))
+    r = resolved_record(order, split)
+    assert r["train_tomos"] == ["TS_000"] and r["val_tomo"] == "TS_001"

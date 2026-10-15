@@ -69,11 +69,19 @@ def prepare_training_inputs(job: JobDir, p: TrainParams):
     return cfg_path, split, order
 
 
+def resolved_record(order, split) -> dict:
+    """What the run actually used, by name. ``train_tomos`` in the parameters is
+    empty when it defaulted to "every annotated tomogram except the validation
+    one", so the effective sets are recorded here."""
+    return {"train_tomos": list(order[:split[1]]), "val_tomo": order[split[2]],
+            "order": list(order), "data_split": list(split)}
+
+
 def run_train(job: JobDir, p: TrainParams):
     p.validate()
     job.mkdirs("checkpoints")
     cfg_path, split, order = prepare_training_inputs(job, p)
-    write_params(job.params_json, "train", asdict(p),
+    write_params(job.params_json, "train", {**asdict(p), "resolved": resolved_record(order, split)},
                  {"prepare_job": job.relative(p.prepare_job)})
     print(f"training order: {order}; data_split={split}", flush=True)
     args = compat.build_train_args(p, cfg_path, split, job.root)
