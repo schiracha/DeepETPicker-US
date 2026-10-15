@@ -246,3 +246,15 @@ def test_compare(tmp_path, capsys):
     assert main(["compare", "--a", str(a), "--b", str(b), "--truth", str(t), "--tol", "3"]) == 0
     out = capsys.readouterr().out
     assert "TOTAL nA=3 nB=2 matched=2" in out and "X" in out
+
+
+def test_loss_plot_is_written_atomically(tmp_path):
+    pytest.importorskip("matplotlib")
+    from deepetpicker.plots import plot_loss
+    csv_path = tmp_path / "metrics.csv"
+    csv_path.write_text("epoch,train_loss,val_loss,val_f1\n0,0.9,0.95,0.1\n1,0.5,0.6,0.3\n2,0.3,,0.5\n")
+    assert plot_loss(csv_path, tmp_path / "loss_full.png") is True
+    assert (tmp_path / "loss_full.png").read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert not (tmp_path / "loss_full.png.tmp").exists()
+    csv_path.write_text("epoch,val_f1\n0,0.1\n")
+    assert plot_loss(csv_path, tmp_path / "none.png") is False and not (tmp_path / "none.png").exists()

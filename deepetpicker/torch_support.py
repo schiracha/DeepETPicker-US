@@ -40,6 +40,11 @@ class MetricsCSV(pl.Callback):
                 self.w.writeheader()
         self.w.writerow(row)
         self.f.flush()
+        try:                                  # a failing plot must never stop a training run
+            from .plots import plot_loss
+            plot_loss(self.path, self.path.with_name("loss_full.png"))
+        except Exception as e:                # noqa: BLE001
+            print(f"warning: loss plot not updated: {e}", flush=True)
         print("epoch=%d " % row["epoch"] + " ".join(f"{k}={v:.6g}" for k, v in row.items() if k != "epoch"),
               flush=True)
 
