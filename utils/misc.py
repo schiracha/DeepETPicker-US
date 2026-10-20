@@ -34,7 +34,7 @@ def combine(data, shape, block_size=72, pad_size=18, reverse=False):
     if reverse:
         shape = shape[::-1]
     try:
-        union_data = np.zeros(shape, dtype=np.float)
+        union_data = np.zeros(shape, dtype=float)
     except:
         union_data = np.zeros(shape, dtype=np.float32)
 
@@ -271,7 +271,7 @@ def cal_metrics_MultiCls(pred, gt, occupancy_map, cfg, args, pad_size, dir_name,
         areas = np.array(pred)[:, 4]
         pred = np.array(pred)
         try:
-            pred_final_ = pred[:, 1:4].astype(np.float)
+            pred_final_ = pred[:, 1:4].astype(float)
         except:
             pred_final_ = pred[:, 1:4].astype(np.float32)
 
@@ -467,7 +467,7 @@ def cal_metrics_MultiCls(pred, gt, occupancy_map, cfg, args, pad_size, dir_name,
         df.to_csv(f'{save_dir}/{dir_name}/loc_cls/localization_res_padsize{pad_size}_segThresh{args.threshold}.csv')
 
         try:
-            temp = np.array(df.to_numpy()[0, 1:]).astype(np.float)
+            temp = np.array(df.to_numpy()[0, 1:]).astype(float)
         except:
             temp = np.array(df.to_numpy()[0, 1:]).astype(np.float32)
 

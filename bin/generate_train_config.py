@@ -8,14 +8,14 @@ DeepETPickerHome = dirname(abspath(__file__))
 DeepETPickerHome = os.path.split(DeepETPickerHome)[0]
 sys.path.append(DeepETPickerHome)
 sys.path.append(os.path.split(DeepETPickerHome)[0])
+from deepetpicker.project.params import load_legacy_config
 option = importlib.import_module(f".options.option", package=os.path.split(DeepETPickerHome)[1])
 
 if __name__ == "__main__":
     options = option.BaseOptions()
     args = options.gather_options()
 
-    with open(args.pre_configs, 'r') as f:
-        train_config = json.loads(''.join(f.readlines()).lstrip('pre_config='))
+    train_config = load_legacy_config(args.pre_configs)
     train_config['dset_name'] = args.dset_name
     train_config['coord_path'] = train_config['base_path'] + '/coords'
     train_config['tomo_path'] = train_config['base_path'] + '/data_std'

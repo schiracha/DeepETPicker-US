@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepetpicker"
+version = "0.2.0.dev0"
+description = "Job-directory command line for DeepETPicker (prepare / train / predict / export)"
+requires-python = ">=3.8"
+dependencies = ["numpy", "pandas", "mrcfile", "starfile"]
+
+[project.scripts]
+deepetpicker = "deepetpicker.cli:main"
+
+[tool.setuptools]
+packages = ["deepetpicker", "deepetpicker.io", "deepetpicker.prepare", "deepetpicker.project", "deepetpicker.jobs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

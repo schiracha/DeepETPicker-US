@@ -7,6 +7,66 @@ A deep learning based open-source software with a friendly user interface to pic
 
 **Note**: DeepETPicker is a Pytorch implementation. 
 
+## **About this fork**
+
+I reorganised how this software reads and writes data, because the original layout was hard to follow and the interface sometimes failed. Everything hung off a single `base_path`, predictions ended up inside TensorBoard's version folders, and it was never clear from the guide which file fed which step. The workflow now follows RELION: every step writes into its own numbered job directory, a later step reads an earlier one by path, and nothing is overwritten when you re-run. The steps are plain command-line programs (`deepetpicker prepare | train | predict | export | compare`) so that [RELION-US](https://github.com/schiracha/RELION-US), a web front end for RELION, can run them as jobs next to RELION's own, locally or on SLURM.
+
+The old PyQt interface (`main.py`) and the `bin/` scripts are still here; apart from the bug fixes listed in the plan (for example `bin/train_bash.py` used to ignore `--train_set_ids` / `--val_set_ids`), I did not change what they do. I plan to remove the interface once everything it did, including the things it did silently, is covered by the new workflow; the list of those is in [docs/PLAN_relion_io_webgui.md](docs/PLAN_relion_io_webgui.md). The original installation and GUI tutorial below still apply to it.
+
+Where this fork differs from the original [cbmi-group/DeepETPicker](https://github.com/cbmi-group/DeepETPicker): the `deepetpicker` command line and package are new, and `train.py` / `test.py` gained an output-directory mode (checkpoints and predictions go into the job directory; a failed training run now raises instead of being swallowed). RELION-US needs this fork, not the original. I also corrected one reporting bug in the validation step: `val_f1` and `val_iou` were swapped (the IoU was logged as F1 and the reverse), so logs from earlier runs have those two labels interchanged.
+
+## **Quick start: job directories**
+
+Install as described under [Setup](#setup) (conda, Python 3.8, PyTorch 1.7.1, then `pip install -r requirement.txt`), and then, from a checkout of this repository:
+
+```bash
+pip install -e .          # provides the `deepetpicker` command; keep the checkout in place
+```
+
+`prepare` needs only that. `train` and `predict` need the PyTorch environment.
+
+A worked example: tomograms recorded at 2.1 Å/px and binned 3 times (6.3 Å/px), a 150 Å particle, and `.coords` files with the known particles of two tomograms (`TS_001`, `TS_002`) next to a third that has none (`TS_003`). Run from a project folder, and give each command its own job directory:
+
+```bash
+# 1. standardize the tomograms and paint weak labels from the known particles.
+#    A 150 A particle is 24 voxels at 6.3 A/px; the diameters are made odd (25, label 13).
+deepetpicker prepare --output_dir DeepETPickerPrepare/job001 \
+    --tomo_dir raw_data --coords_dir raw_data \
+    --pixel_size 6.3 --particle_diameter_A 150
+
+# 2. train; TS_002 is held out for validation, the other annotated tomogram trains
+deepetpicker train --output_dir DeepETPickerTrain/job002 \
+    --prepare_job DeepETPickerPrepare/job001 --val_tomo TS_002 --gpu 0
+
+# 3. pick particles in all three tomograms; the picks were made on a 6.3 A/px grid and a RELION
+#    tomogram at 10.5 A/px needs them multiplied by 6.3 / 10.5 = 0.6 in particles.star
+deepetpicker predict --output_dir DeepETPickerPredict/job003 \
+    --train_job DeepETPickerTrain/job002 --tomo_dir raw_data --relion_scale 0.6
+
+# 4. other formats, if you need them
+deepetpicker export --coords_dir DeepETPickerPredict/job003/coords --fmt box --output_dir picks_box
+```
+
+Each job leaves everything it made in its own directory:
+
+```
+DeepETPickerPrepare/job001/   tomograms_std/  coords/  labels/  occupancy/  dataset.star  job_params.json
+DeepETPickerTrain/job002/     checkpoints/ (best.ckpt, last.ckpt)  metrics.csv  loss_full.png  logs/  job_params.json
+DeepETPickerPredict/job003/   coords/ (<tomogram>.coords)  particles.star  coords_with_area/  job_params.json
+```
+
+`job_params.json` records every parameter and which earlier job each one used, so a result can always be traced back to its model and settings. [docs/job_directories.md](docs/job_directories.md) has the full reference: every flag, every file, the formats, how pixel size and binning translate into voxel diameters, and what replaced which old file.
+
+Picks are whole voxels unless you pass `--refine_centroids`, an experimental option that moves each pick to the centre of mass of the prediction around it. I have not validated it against ground truth.
+
+## **Using it from RELION-US**
+
+RELION-US lists these three steps under **DeepETPicker (Beta)**, builds the same command lines from a form, and chains them by job directory. See its README for installation.
+
+## **Original documentation (PyQt interface)**
+
+The rest of this file is the original documentation, written for the PyQt interface and the `bin/` scripts.
+
 ## **Setup**
 
 ### **Prerequisites**

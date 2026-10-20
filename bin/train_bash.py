@@ -9,6 +9,8 @@ DeepETPickerHome = dirname(abspath(__file__))
 DeepETPickerHome = os.path.split(DeepETPickerHome)[0]
 sys.path.append(DeepETPickerHome)
 sys.path.append(os.path.split(DeepETPickerHome)[0])
+from deepetpicker.project.params import load_legacy_config
+from deepetpicker.project.legacy import reorder_num_name_csv
 train = importlib.import_module(".train", package=os.path.split(DeepETPickerHome)[1])
 option = importlib.import_module(f".options.option", package=os.path.split(DeepETPickerHome)[1])
 
@@ -18,8 +20,7 @@ if __name__ == '__main__':
     args = options.gather_options()
 
     # cofig
-    with open(args.train_configs, 'r') as f:
-        cfg = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+    cfg = load_legacy_config(args.train_configs)
 
     # parameters
     args.use_bg = True
@@ -52,25 +53,11 @@ if __name__ == '__main__':
     args.val_set_ids = cfg['val_set_ids']
     args.num_classes = train_cls_num
 
-    train_list = []
-    for item in args.train_set_ids.split(','):
-        if '-' in item:
-            tmp = [int(i) for i in item.split('-')]
-            train_list.extend(np.arange(tmp[0], tmp[1] + 1).tolist())
-        else:
-            train_list.append(int(item))
-
-    val_list = []
-    for item in args.val_set_ids.split(','):
-        if '-' in item:
-            tmp = [int(i) for i in item.split('-')]
-            val_list.extend(np.arange(tmp[0], tmp[1] + 1).tolist())
-        else:
-            val_list.append(int(item))
-    val_first = len(train_list) if val_list[0] not in train_list else len(train_list) - 1
-    args.data_split = [0, len(train_list),  # train
-                       val_first, val_first + 1,  # val
-                       val_first, val_first + 1]  # test_val
+    # The dataloader indexes coords/num_name.csv by position, so the file has
+    # to be reordered (train, val, rest) for the ids to select what they name.
+    # The GUI always did this; this script used to skip it.
+    args.data_split = reorder_num_name_csv(os.path.join(cfg['coord_path'], 'num_name.csv'),
+                                           args.train_set_ids, args.val_set_ids)
 
     for k, v in sorted(vars(args).items()):
         print(k, '=', v)

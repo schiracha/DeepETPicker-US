@@ -21,17 +21,14 @@ class InputNorm():
             self.save_dir = os.path.join(self.base_dir, 'data_norm')
         os.makedirs(self.save_dir, exist_ok=True)
 
-        self.dir_list = [i.split('/')[-1] for i in glob.glob(self.tomo_path + '/*%s' % self.tomo_format)]
+        self.dir_list = sorted(i.split('/')[-1] for i in glob.glob(self.tomo_path + '/*%s' % self.tomo_format))
         print(self.dir_list)
 
     def single_handle(self, i):
         dir_name = self.dir_list[i]
         with mrcfile.open(os.path.join(self.tomo_path, dir_name),
                           permissive=True) as gm:
-            try:
-                data = np.array(gm.data).astype(np.float)
-            except:
-                data = np.array(gm.data).astype(np.float32)
+            data = np.array(gm.data).astype(np.float64)
             # print(data.shape)
             if self.norm_type == 'standardization':
                 data -= data.mean()
@@ -42,16 +39,14 @@ class InputNorm():
 
             reconstruction_norm = mrcfile.new(
                 os.path.join(self.save_dir, dir_name), overwrite=True)
-            try:
-                reconstruction_norm.set_data(data.astype(np.float32))
-            except:
-                reconstruction_norm.set_data(data.astype(np.float))
+            reconstruction_norm.set_data(data.astype(np.float32))
 
             reconstruction_norm.close()
             print('%d/%d finished.' % (i + 1, len(self.dir_list)))
 
     def handle_parallel(self):
-        with Pool(len(self.dir_list)) as p:
+        # one process per tomogram loads every volume at once; bound it
+        with Pool(max(1, min(len(self.dir_list), os.cpu_count() or 1, 4))) as p:
             p.map(self.single_handle, np.arange(len(self.dir_list)).tolist())
 
 

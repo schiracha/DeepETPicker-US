@@ -21,17 +21,21 @@ from dataset.dataloader_DynamicLoad import Dataset_ClsBased
 
 
 def test_func(args, stdout=None):
+    out_dir_job = getattr(args, 'out_dir', None)     # set by `deepetpicker predict`; None = old behaviour
     if stdout is not None:
         save_stdout = sys.stdout
         save_stderr = sys.stderr
         sys.stdout = stdout
         sys.stderr = stdout
     for test_idx in args.test_idxs:
-        model_name = args.checkpoints.split('/')[-4] + '_' + args.checkpoints.split('/')[-1].split('-')[0]
+        if out_dir_job:
+            model_name = os.path.basename(args.checkpoints)
+        else:
+            model_name = args.checkpoints.split('/')[-4] + '_' + args.checkpoints.split('/')[-1].split('-')[0]
         # load config parameters
         if len(args.configs) > 0:
             with open(args.configs, 'r') as f:
-                cfg = json.loads(''.join(f.readlines()).lstrip('train_configs='))
+                cfg = json.loads(f.read().partition('=')[2])
 
         start_time = time.time()
         args.data_split[-2] = test_idx
@@ -42,9 +46,9 @@ def test_func(args, stdout=None):
         dir_name = dir_list[args.data_split[-2]]
         print(dir_name)
 
-        tomo_file = glob(cfg["tomo_path"] + "/*%s" % cfg["tomo_format"])[0]
-        data_file = mrcfile.open(tomo_file, permissive=True)
-        data_shape = data_file.data.shape
+        tomo_file = os.path.join(cfg["tomo_path"], dir_name + cfg["tomo_format"])
+        with mrcfile.open(tomo_file, permissive=True, header_only=True) as data_file:
+            data_shape = (int(data_file.header.nz), int(data_file.header.ny), int(data_file.header.nx))
         print(data_shape)
         dataset = cfg["dset_name"]
 
@@ -87,21 +91,39 @@ def test_func(args, stdout=None):
                             if args.meanPool_NMS:
                                 coords_out = torch.cat(epoch_output, dim=0).detach().cpu().numpy()
                                 print('coords_out:', coords_out.shape)
+                                if getattr(args, '_flooded_batches', 0):
+                                    print(f"warning: {args._flooded_batches} batch(es) had more than 2000 candidate "
+                                          f"peaks and were skipped: the model marks almost everything as particle, "
+                                          f"which usually means it is under-trained (check val_precision in "
+                                          f"metrics.csv). Picks from those batches are missing.", flush=True)
+                                    args._flooded_batches = 0
                                 if args.de_duplication:
                                     centroids = de_dup(coords_out, args)
-                                out_dir = '/'.join(args.checkpoints.split('/')[:-2]) + f'/{args.out_name}'
-                                os.makedirs(os.path.join(out_dir, 'Coords_withArea'), exist_ok=True)
-                                np.savetxt(os.path.join(out_dir, 'Coords_withArea', dir_name + '.coords'),
-                                           centroids.astype(float),
-                                           fmt='%s',
-                                           delimiter='\t')
+                                if out_dir_job:
+                                    # job directory: native .coords (floats when refined), no hidden PredictedLabels folder
+                                    refined = getattr(args, 'refine_centroids', False)
+                                    os.makedirs(os.path.join(out_dir_job, 'coords_with_area'), exist_ok=True)
+                                    np.savetxt(os.path.join(out_dir_job, 'coords_with_area', dir_name + '.coords'),
+                                               np.asarray(centroids, dtype=float), fmt='%s', delimiter='\t')
+                                    os.makedirs(os.path.join(out_dir_job, 'coords'), exist_ok=True)
+                                    c4 = np.asarray(centroids, dtype=float)[:, 0:4]
+                                    np.savetxt(os.path.join(out_dir_job, 'coords', dir_name + '.coords'),
+                                               c4 if refined else c4.astype(int),
+                                               fmt='%d\t%.3f\t%.3f\t%.3f' if refined else '%s', delimiter='\t')
+                                else:
+                                    out_dir = '/'.join(args.checkpoints.split('/')[:-2]) + f'/{args.out_name}'
+                                    os.makedirs(os.path.join(out_dir, 'Coords_withArea'), exist_ok=True)
+                                    np.savetxt(os.path.join(out_dir, 'Coords_withArea', dir_name + '.coords'),
+                                               centroids.astype(float),
+                                               fmt='%s',
+                                               delimiter='\t')
 
-                                coords = centroids[:, 0:4]
-                                os.makedirs(os.path.join(out_dir, 'Coords_All'), exist_ok=True)
-                                np.savetxt(os.path.join(out_dir, 'Coords_All', dir_name + '.coords'),
-                                           coords.astype(int),
-                                           fmt='%s',
-                                           delimiter='\t')
+                                    coords = centroids[:, 0:4]
+                                    os.makedirs(os.path.join(out_dir, 'Coords_All'), exist_ok=True)
+                                    np.savetxt(os.path.join(out_dir, 'Coords_All', dir_name + '.coords'),
+                                               coords.astype(int),
+                                               fmt='%s',
+                                               delimiter='\t')
 
 
                     def test_dataloader(self):
@@ -159,6 +181,7 @@ def test_func(args, stdout=None):
 
                     def _nms_v2(self, pred, kernel=3, mp_num=5, positions=None):
                         pred = torch.where(pred > 0.5, 1, 0)
+                        binmask = pred.clone()
                         meanPool = nn.AvgPool3d(kernel, 1, kernel // 2).cuda()
                         maxPool = nn.MaxPool3d(kernel, 1, kernel // 2).cuda()
                         hmax = pred.clone().float()
@@ -168,6 +191,13 @@ def test_func(args, stdout=None):
                         hmax = maxPool(hmax)
                         keep = ((hmax == pred).float()) * ((pred > 0.1).float())
                         coords = keep.nonzero()  # [N, 5]
+                        if coords.shape[0] > 2000:
+                            # Same guard as the validation _nms_v2 in train.py. Thousands of candidate peaks in one
+                            # batch means the network flags (nearly) everything -- in practice an under-trained
+                            # model. Handling them one by one here, and then de-duplicating the pile in de_dup
+                            # (quadratic), takes hours; skip the batch and say so.
+                            args._flooded_batches = getattr(args, '_flooded_batches', 0) + 1
+                            return torch.zeros([0, 5]).cuda()
                         coords = coords[coords[:, 2] >= args.pad_size[0]]
                         coords = coords[coords[:, 2] <= args.block_size - args.pad_size[0]]
                         coords = coords[coords[:, 3] >= args.pad_size[0]]
@@ -179,12 +209,22 @@ def test_func(args, stdout=None):
                             h_val = torch.cat(
                                 [hmax[item[0], item[1], item[2], item[3]:item[3] + 1, item[4]:item[4] + 1] for item in
                                  coords], dim=0)
+                            offsets = None
+                            if getattr(args, 'refine_centroids', False):
+                                from deepetpicker.refine import refine_offsets   # sub-voxel offsets (dz, dy, dx)
+                                offsets = refine_offsets(binmask, coords, min(args.pad_size[0], max(2, args.mini_dist - 1)))
                             leftTop_coords = positions[coords[:, 0]] - (args.block_size // 2) - args.pad_size[0]
                             coords[:, 2:5] = coords[:, 2:5] + leftTop_coords
 
-                            pred_final = torch.cat(
-                                [coords[:, 1:2] + 1, coords[:, 4:5], coords[:, 3:4], coords[:, 2:3], h_val],
-                                dim=1)
+                            if offsets is None:
+                                pred_final = torch.cat(
+                                    [coords[:, 1:2] + 1, coords[:, 4:5], coords[:, 3:4], coords[:, 2:3], h_val],
+                                    dim=1)
+                            else:
+                                pred_final = torch.cat(
+                                    [coords[:, 1:2] + 1, coords[:, 4:5] + offsets[:, 2:3],
+                                     coords[:, 3:4] + offsets[:, 1:2], coords[:, 2:3] + offsets[:, 0:1], h_val],
+                                    dim=1)
 
                             return pred_final
                         except:
@@ -199,14 +239,16 @@ def test_func(args, stdout=None):
                 runner = Trainer(gpus=args.gpu_id, #
                                  accelerator='dp'
                                  )
-                os.makedirs(f'result/{dataset}/{model_name}/', exist_ok=True)
+                if not out_dir_job:
+                    os.makedirs(f'result/{dataset}/{model_name}/', exist_ok=True)
 
                 runner.test(model=model)
 
         end_time = time.time()
         used_time = end_time - start_time
-        save_path = '/'.join(args.checkpoints.split('/')[:-2]) + f'/{args.out_name}'
-        os.makedirs(save_path, exist_ok=True)
+        if not out_dir_job:
+            save_path = '/'.join(args.checkpoints.split('/')[:-2]) + f'/{args.out_name}'
+            os.makedirs(save_path, exist_ok=True)
         pad_size = args.pad_size[0]
 
     print('*' * 100)
