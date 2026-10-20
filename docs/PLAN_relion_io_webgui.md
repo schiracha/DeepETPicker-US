@@ -111,7 +111,7 @@ Anything else the old GUI does implicitly (e.g. defaults baked into `train_ok`: 
 - No GPU or torch in the planning container, so training/inference parity must be verified on your workstation.
 - RELION-5 particle coordinate units: RELION-US's bridge treats `rlnCoordinateX/Y/Z` as pixels of the tomogram used, with a binning factor. I have not verified this against the RELION-5 tomography documentation; do that before Phase 2 finalizes `particles.star`.
 - Upgrading torch/lightning (from torch 1.7.1 / lightning 1.1.0) may change results. Hence the Phase-0 baseline.
-- Push access: GitHub write access for this session to `schiracha/DeepETPicker_Sc` currently fails (403), so nothing here is on the remote yet. Read access to `schiracha/relion-us` works; I cannot push there either.
+- Push access (resolved): early on, GitHub write access from the planning container failed (403); after reconnecting GitHub everything was pushed and merged. The repository was renamed from `DeepETPicker_Sc` to `DeepETPicker-US`; the old URL redirects.
 
 ## 6b. Status (Phases 0-1, this PR)
 Done, with tests (`python -m pytest tests`, 31 passing, torch-free, also run by `.github/workflows/tests.yml`):
