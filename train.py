@@ -100,7 +100,8 @@ class UNetExperiment(pl.LightningModule):
                     args.test_mode == "test" or args.test_mode == "val" or args.test_mode == "val_v1":
                 loss_seg = self.loss_function_seg(self.seg_output, label)
 
-                precision, recall, f1_score, iou = seg_metrics(self.seg_output, label, threshold=args.threshold)
+                # seg_metrics returns (precision, recall, iou, f1); this line used to unpack iou and f1 the other way round
+                precision, recall, iou, f1_score = seg_metrics(self.seg_output, label, threshold=args.threshold)
 
                 self.log('val_loss', loss_seg, on_step=False, on_epoch=True)
                 self.log('val_precision', precision, on_step=False, on_epoch=True)

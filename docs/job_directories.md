@@ -190,7 +190,7 @@ It has no optics block, angles or origins; RELION-US's **Import from DeepETPicke
 
 ### `metrics.csv` and the progress line
 
-`metrics.csv` has an `epoch` column and every scalar metric the model has logged (`train_loss`, `val_loss`, `val_precision`, `val_recall`, `val_f1`, `val_iou`), one row after each training epoch (not for the validation sanity check that lightning runs before epoch 0). The same row is printed on its own line, `epoch=3 train_loss=0.123 val_loss=0.234 …`, and `loss_full.png` (train and validation loss) is redrawn at the same time, atomically, which is what RELION-US shows on the Progress tab.
+`metrics.csv` has an `epoch` column and every scalar metric the model has logged (`train_loss`, `val_loss`, `val_precision`, `val_recall`, `val_f1`, `val_iou`; `val_f1` is the Dice score and `val_iou` the intersection over union), one row after each training epoch (not for the validation sanity check that lightning runs before epoch 0). The same row is printed on its own line, `epoch=3 train_loss=0.123 val_loss=0.234 …`, and `loss_full.png` (train and validation loss) is redrawn at the same time, atomically, which is what RELION-US shows on the Progress tab.
 
 ## Pixel size, binning and diameters
 
@@ -224,6 +224,7 @@ You do not have to pick on the grid RELION uses. Picks made on a 6.3 Å/px tomog
 
 - **`no tomogram for the coordinates of: 'X' (nearest tomogram: 'Y')`.** A coordinate file must have the same name as its tomogram: `<name>.coords` for `<name>.mrc`. Rename one of them (or copy to a working folder with matching names). The message lists the tomograms it found.
 - **`predict` is very slow, or finds nothing, after a short training run.** After only a few epochs the network marks almost every voxel as particle (look at `val_precision` in `metrics.csv`: a value near 0.01 with `val_recall` near 0.8 is exactly that). Every voxel then becomes a candidate peak. Batches with more than 2000 candidates are now skipped and counted in a warning, instead of being worked through one by one, and the warning says so. Train longer (60 epochs is the default for a reason) before judging the picks.
+- **What the `val_*` numbers measure.** They are scored on 72-voxel blocks (the default block size) cut around the annotated particles, with the particle placed at a random offset of up to block size / 5 (14 voxels) from the block centre, not on whole tomograms, and the network is also given the position inside the block as an input channel. A model that ignored the image and only learned "a particle is somewhere near the middle" would already score a Dice of roughly 0.14 for a 17-voxel particle (simulated, binary label). So read a validation Dice near that value as "no evidence of detection yet", and judge a model with `predict` followed by `compare --truth` on an annotated tomogram.
 - **Training and validation on the same tomogram.** With a single annotated tomogram `train` trains and validates on it, so `val_*` numbers say nothing about how well the model generalises.
 - **`--relion_scale 10/3.12`** is accepted: write the two pixel sizes instead of doing the division.
 
