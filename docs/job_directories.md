@@ -82,6 +82,9 @@ Picks particles with a trained model. Needs the same environment as `train`.
 | `--gpu` | `0` | comma-separated GPU ids |
 | `--refine_centroids` | off | experimental sub-voxel refinement, see below |
 | `--relion_scale` | `1.0` | picking-grid voxels → RELION tomogram pixels, applied to `particles.star` only: picking pixel size / RELION tomogram pixel size, as a number or a ratio such as `10/3.12` |
+| `--min_score` | `0` | `particles.star` keeps only picks whose score (`rlnAutopickFigureOfMerit`, 0 to 1) is at least this; `coords/` and `coords_with_area/` keep every pick. Leave at 0 to filter afterwards without re-running |
+
+Every pick has a score: the peak of the smoothed binary prediction mask around it, close to 1 for a pick inside a solidly predicted particle and low for a marginal blob (it is not the raw network probability; the prediction is binarized first). It is written to `particles.star` as `rlnAutopickFigureOfMerit`, RELION's own pick-score column, and as the fifth column of `coords_with_area/<tomogram>.coords` (`class_id x y z score`), row for row with `coords/<tomogram>.coords`. If the two files ever disagree in length, no scores are attached rather than risk attaching them to the wrong picks. `export --fmt relion5` on `coords_with_area/` writes a `particles.star` with the scores, for a job run before they were added.
 
 By default a pick is a whole voxel: the maximum of the smoothed binary prediction. With `--refine_centroids` each pick moves to the centre of mass of the binary prediction in a cube of about one particle radius around it, which gives fractional coordinates. It is a heuristic, exact for a symmetric blob inside the cube and biased towards the peak voxel if the cube cuts through the blob, and has not been validated against ground truth.
 

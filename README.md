@@ -57,6 +57,12 @@ DeepETPickerPredict/job003/   coords/ (<tomogram>.coords)  particles.star  coord
 
 `job_params.json` records every parameter and which earlier job each one used, so a result can always be traced back to its model and settings. [docs/job_directories.md](docs/job_directories.md) has the full reference: every flag, every file, the formats, how pixel size and binning translate into voxel diameters, and what replaced which old file.
 
+Each pick has a score, written to `particles.star` as `rlnAutopickFigureOfMerit` (RELION's own pick-score column, so RELION's Select job and `relion_star_handler --select` can threshold on it) and, for each pick, as the fifth column of `coords_with_area/<tomogram>.coords`. It is not a raw network probability: it is the peak of the smoothed 0/1 prediction mask, about 1.0 for a pick inside a solidly predicted particle and low for a marginal blob. Filter afterwards without re-running the network, or pass `--min_score 0.8` to keep only picks scoring at least that in `particles.star` (`coords/` always keeps every pick). To add scores to a predict job that was run before this, export its `coords_with_area/`:
+
+```
+deepetpicker export --coords_dir DeepETPickerPredict/job003/coords_with_area --fmt relion5 --output_dir with_scores
+```
+
 Picks are whole voxels unless you pass `--refine_centroids`, an experimental option that moves each pick to the centre of mass of the prediction around it. I have not validated it against ground truth.
 
 ## **Using it from RELION-US**

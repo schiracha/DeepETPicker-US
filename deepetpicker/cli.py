@@ -100,6 +100,9 @@ def build_parser():
     p.add_argument("--relion_scale", type=_scale, default=1.0,
                    help="picking-grid voxels -> RELION tomogram pixels, applied to particles.star only: picking "
                         "pixel size / RELION tomogram pixel size, as a number or a ratio such as 10/3.12")
+    p.add_argument("--min_score", type=float, default=0.0,
+                   help="particles.star keeps only picks whose score (rlnAutopickFigureOfMerit, 0 to 1) is at "
+                        "least this; coords/ keeps every pick. Leave 0 to filter later without re-running")
 
     p = sub.add_parser("export", help="convert .coords to star / box / coords / RELION-5 particles.star")
     p.add_argument("--coords_dir", required=True, help="folder of <name>.coords files (e.g. a predict job's coords/)")

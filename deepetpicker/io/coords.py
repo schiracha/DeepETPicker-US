@@ -29,6 +29,36 @@ def read_coords(path) -> np.ndarray:
     return np.asarray(rows, dtype=np.float64).reshape(-1, 4)
 
 
+def read_coords_scored(path):
+    """``(coords, scores)``: like ``read_coords`` but also accepts the five-column
+    form predict writes to ``coords_with_area/``: ``class_id x y z score``.
+    ``scores`` is an (N,) float array, or None when the file has no fifth column.
+    (The column is DeepETPicker's confidence-like value for the pick: the peak of
+    the smoothed 0/1 prediction mask, 1.0 for a solidly predicted particle; see
+    ``deepetpicker.io.relion.SCORE_COLUMN``.)"""
+    path = Path(path)
+    rows, scores = [], []
+    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.replace(",", " ").split()
+        if len(parts) == 3:
+            parts = ["1"] + parts
+        if len(parts) not in (4, 5):
+            raise ValueError(f"{path}:{lineno}: expected 3, 4 or 5 columns, got {len(parts)}: {line!r}")
+        values = [float(p) for p in parts]
+        rows.append(values[:4])
+        if len(values) == 5:
+            scores.append(values[4])
+    coords = np.asarray(rows, dtype=np.float64).reshape(-1, 4)
+    if not scores:
+        return coords, None
+    if len(scores) != len(rows):
+        raise ValueError(f"{path}: some rows have a score column and some do not")
+    return coords, np.asarray(scores, dtype=np.float64)
+
+
 def write_coords(path, coords: np.ndarray, integer: bool = False) -> None:
     """Write ``class_id x y z`` tab separated; ``integer`` rounds x y z."""
     coords = np.asarray(coords, dtype=np.float64).reshape(-1, 4)

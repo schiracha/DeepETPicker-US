@@ -16,6 +16,10 @@ import starfile
 
 DEFAULT_TOMO_COLUMN = "rlnTomoReconstructedTomogram"   # unverified default; override with --tomo_column
 COORD_COLUMNS = ("rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ")
+# RELION's own column for "how good is this pick": what auto-picking writes, and
+# what RELION's Select job (select on value) and relion_star_handler --select
+# can threshold on. DeepETPicker's per-pick score goes here.
+SCORE_COLUMN = "rlnAutopickFigureOfMerit"
 
 
 def _table_with(path, column):
@@ -63,20 +67,30 @@ def read_particles_star(path, scale=1.0) -> dict[str, np.ndarray]:
     return {n: arr[names == n] for n in dict.fromkeys(names)}
 
 
-def write_particles_star(path, coords_by_name: dict, scale=1.0) -> None:
+def write_particles_star(path, coords_by_name: dict, scale=1.0, scores_by_name: dict | None = None) -> None:
     """Coordinate-only RELION particles table (block ``particles``): the same
-    columns as RELION-US's DeepETPicker bridge."""
+    columns as RELION-US's DeepETPicker bridge. With ``scores_by_name`` (name ->
+    (N,) array, one score per pick) a ``rlnAutopickFigureOfMerit`` column is
+    added, so RELION's own tools can select on it."""
     frames = []
     for name, c in coords_by_name.items():
         c = np.asarray(c, dtype=np.float64).reshape(-1, 4)
-        frames.append(pd.DataFrame({
+        frame = {
             "rlnTomoName": name,
             "rlnCoordinateX": c[:, 1] * scale,
             "rlnCoordinateY": c[:, 2] * scale,
             "rlnCoordinateZ": c[:, 3] * scale,
             "rlnClassNumber": c[:, 0].astype(int),
-        }))
-    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(
-        columns=["rlnTomoName", "rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ", "rlnClassNumber"])
+        }
+        if scores_by_name is not None:
+            s = np.asarray(scores_by_name[name], dtype=np.float64).reshape(-1)
+            if len(s) != len(c):
+                raise ValueError(f"{name}: {len(s)} scores for {len(c)} picks")
+            frame[SCORE_COLUMN] = s
+        frames.append(pd.DataFrame(frame))
+    columns = ["rlnTomoName", "rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ", "rlnClassNumber"]
+    if scores_by_name is not None:
+        columns.append(SCORE_COLUMN)
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     starfile.write({"particles": df}, path, overwrite=True)
