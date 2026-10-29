@@ -142,6 +142,91 @@ def test_predict_outputs_particles_star(prepared, tmp_path):
     np.testing.assert_allclose(read_particles_star(pj.particles_star, scale=0.5)["A"], [[1, 10, 20.5, 30.25]])
 
 
+def _scored_job(tmp_path):
+    pj = JobDir(tmp_path / "pj")
+    (pj.root / "coords").mkdir(parents=True)
+    (pj.root / "coords_with_area").mkdir()
+    (pj.root / "coords" / "A.coords").write_text("1\t10.000\t20.500\t30.250\n1\t1.000\t2.000\t3.000\n1\t7.000\t8.000\t9.000\n")
+    (pj.root / "coords_with_area" / "A.coords").write_text(
+        "1.0\t10.0\t20.5\t30.25\t0.95\n1.0\t1.0\t2.0\t3.0\t0.40\n1.0\t7.0\t8.0\t9.0\t0.80\n")
+    (pj.root / "coords" / "B.coords").write_text("")
+    return pj
+
+
+def test_predict_writes_each_picks_score_as_the_relion_figure_of_merit(tmp_path):
+    import starfile
+    pj = _scored_job(tmp_path)
+    counts = write_outputs(pj, PredictParams(train_job="x"), ["A", "B"])
+    assert counts == {"A": 3, "B": 0}
+    df = starfile.read(pj.particles_star)
+    assert list(df.columns) == ["rlnTomoName", "rlnCoordinateX", "rlnCoordinateY", "rlnCoordinateZ",
+                                "rlnClassNumber", "rlnAutopickFigureOfMerit"]
+    np.testing.assert_allclose(df["rlnAutopickFigureOfMerit"], [0.95, 0.40, 0.80])
+    np.testing.assert_allclose(df["rlnCoordinateX"], [10.0, 1.0, 7.0])       # scores sit on the right picks
+
+
+def test_min_score_filters_the_star_but_never_the_native_coords(tmp_path):
+    import starfile
+    pj = _scored_job(tmp_path)
+    counts = write_outputs(pj, PredictParams(train_job="x", min_score=0.8, relion_scale=2.0), ["A", "B"])
+    assert counts == {"A": 2, "B": 0}
+    df = starfile.read(pj.particles_star)
+    np.testing.assert_allclose(df["rlnAutopickFigureOfMerit"], [0.95, 0.80])
+    np.testing.assert_allclose(df["rlnCoordinateX"], [20.0, 14.0])
+    assert len((pj.root / "coords" / "A.coords").read_text().splitlines()) == 3          # unfiltered
+    assert len((pj.root / "coords_with_area" / "A.coords").read_text().splitlines()) == 3
+
+
+def test_scores_that_do_not_line_up_are_left_out_rather_than_attached_to_the_wrong_picks(tmp_path, capsys):
+    import starfile
+    pj = _scored_job(tmp_path)
+    (pj.root / "coords_with_area" / "A.coords").write_text("1.0\t10.0\t20.5\t30.25\t0.95\n")       # one row too few
+    write_outputs(pj, PredictParams(train_job="x"), ["A", "B"])
+    assert "rlnAutopickFigureOfMerit" not in starfile.read(pj.particles_star).columns
+    assert "without rlnAutopickFigureOfMerit" in capsys.readouterr().out
+    with pytest.raises(ValueError, match="min_score needs"):
+        write_outputs(pj, PredictParams(train_job="x", min_score=0.5), ["A", "B"])
+
+
+def test_min_score_is_validated_and_a_cli_option():
+    for bad in (-0.1, 1.5):
+        with pytest.raises(ValueError, match="min_score"):
+            PredictParams(train_job="x", tomo_dir="d", min_score=bad).validate()
+    from deepetpicker.cli import build_parser
+    ns = build_parser().parse_args(["predict", "--output_dir", "o", "--train_job", "t", "--tomo_dir", "d",
+                                    "--min_score", "0.7"])
+    assert ns.min_score == 0.7
+
+
+def test_coords_with_a_score_column_are_read_and_the_strict_reader_still_refuses_them(tmp_path):
+    from deepetpicker.io.coords import read_coords, read_coords_scored
+    f = tmp_path / "a.coords"
+    f.write_text("1\t1\t2\t3\t0.5\n2\t4\t5\t6\t0.9\n")
+    c, s = read_coords_scored(f)
+    np.testing.assert_allclose(c, [[1, 1, 2, 3], [2, 4, 5, 6]])
+    np.testing.assert_allclose(s, [0.5, 0.9])
+    f.write_text("1\t1\t2\t3\n")
+    assert read_coords_scored(f)[1] is None
+    f.write_text("1\t1\t2\t3\t0.5\n1\t4\t5\t6\n")
+    with pytest.raises(ValueError, match="some rows"):
+        read_coords_scored(f)
+    with pytest.raises(ValueError):
+        read_coords(tmp_path / "a.coords")                  # unchanged: the plain reader is strict
+
+
+def test_export_relion5_from_coords_with_area_keeps_the_scores(tmp_path):
+    """The way to retrofit scores onto a predict job that was run before they
+    were written to particles.star."""
+    import starfile
+    pj = _scored_job(tmp_path)
+    from deepetpicker.io.export import export
+    export(pj.root / "coords_with_area", tmp_path / "out", "relion5", scale=1.0)
+    df = starfile.read(tmp_path / "out" / "particles.star")
+    np.testing.assert_allclose(df["rlnAutopickFigureOfMerit"], [0.95, 0.40, 0.80])
+    export(pj.root / "coords", tmp_path / "out2", "relion5")           # plain coords: no score column
+    assert "rlnAutopickFigureOfMerit" not in starfile.read(tmp_path / "out2" / "particles.star").columns
+
+
 # ---- export ------------------------------------------------------------
 def test_export_formats_match_legacy_converter(tmp_path):
     legacy = load_module("utils/coordFormatConvert.py")

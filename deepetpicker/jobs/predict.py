@@ -9,7 +9,7 @@ from typing import Optional
 import numpy as np
 
 from .. import compat
-from ..io.coords import read_coords
+from ..io.coords import read_coords, read_coords_scored
 from ..io.relion import DEFAULT_TOMO_COLUMN, read_tomograms_star, write_particles_star
 from ..prepare import normalize
 from ..project.dataset import _match
@@ -34,6 +34,7 @@ class PredictParams:
     gpu_ids: list = field(default_factory=lambda: [0])
     refine_centroids: bool = False         # experimental sub-voxel refinement, see deepetpicker/refine.py
     relion_scale: float = 1.0              # picking-grid voxels -> RELION tomogram pixels (particles.star only)
+    min_score: float = 0.0                 # particles.star keeps picks scoring at least this (coords/ keeps all)
 
     def validate(self):
         if not self.train_job:
@@ -46,6 +47,8 @@ class PredictParams:
             raise ValueError("seg_thresh must be in (0, 1)")
         if self.relion_scale <= 0:
             raise ValueError("relion_scale must be positive")
+        if not 0 <= self.min_score <= 1:
+            raise ValueError("min_score must be in [0, 1]")
 
 
 def prepare_inference_inputs(job: JobDir, p: PredictParams):
@@ -85,13 +88,43 @@ def prepare_inference_inputs(job: JobDir, p: PredictParams):
     return cfg, cfg_path, names, ckpt
 
 
+def _scores_for(job: JobDir, name: str, n_picks: int):
+    """The per-pick scores predict wrote to ``coords_with_area/<name>.coords``
+    (fifth column), or None when they are missing or do not line up one to one
+    with ``coords/<name>.coords`` (never attach scores to the wrong picks)."""
+    f = job.root / "coords_with_area" / f"{name}.coords"
+    if not f.exists() or f.stat().st_size == 0:
+        return None
+    try:
+        _, scores = read_coords_scored(f)
+    except ValueError:
+        return None
+    return scores if scores is not None and len(scores) == n_picks else None
+
+
 def write_outputs(job: JobDir, p: PredictParams, names):
-    """particles.star from the native coords the legacy code wrote."""
-    coords = {}
+    """particles.star from the native coords the legacy code wrote, with each
+    pick's score as ``rlnAutopickFigureOfMerit`` so it can be filtered on
+    afterwards (RELION's Select on value, or RELION-US's Filter Picks). With
+    ``p.min_score`` the star keeps only picks scoring at least that; the native
+    ``coords/`` and ``coords_with_area/`` files always keep every pick."""
+    coords, scores = {}, {}
     for n in names:
         f = job.predictions / f"{n}.coords"
         coords[n] = read_coords(f) if f.exists() and f.stat().st_size else np.zeros((0, 4))
-    write_particles_star(job.particles_star, coords, scale=p.relion_scale)
+        scores[n] = _scores_for(job, n, len(coords[n])) if len(coords[n]) else np.zeros(0)
+    have_scores = all(s is not None for s in scores.values())
+    if not have_scores:
+        print("warning: no usable per-pick scores for some tomograms; particles.star is written without "
+              "rlnAutopickFigureOfMerit", flush=True)
+        scores = None
+    if p.min_score > 0:
+        if scores is None:
+            raise ValueError("min_score needs the per-pick scores, which are missing (see the warning above)")
+        for n in names:
+            keep = scores[n] >= p.min_score
+            coords[n], scores[n] = coords[n][keep], scores[n][keep]
+    write_particles_star(job.particles_star, coords, scale=p.relion_scale, scores_by_name=scores)
     return {n: len(c) for n, c in coords.items()}
 
 

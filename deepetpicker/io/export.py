@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .coords import read_coords
+from .coords import read_coords_scored
 from .relion import write_particles_star
 
 
@@ -50,16 +50,18 @@ def export(coords_dir, out_dir, fmt, cls=None, scale=1.0, relion_name="particles
         raise FileNotFoundError(f"no *.coords in {coords_dir}")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    per = {}
+    per, scored = {}, {}
     for f in files:
-        c = read_coords(f)
+        c, s = read_coords_scored(f)           # a five-column file (coords_with_area/) carries scores
         if cls is not None:
-            c = c[c[:, 0].astype(int) == cls]
-        per[f.stem] = c
+            keep = c[:, 0].astype(int) == cls
+            c, s = c[keep], (s[keep] if s is not None else None)
+        per[f.stem], scored[f.stem] = c, s
     if cls is not None and all(len(c) == 0 for c in per.values()):
         raise ValueError(f"class {cls} not found in any file")
     if fmt == "relion5":
-        write_particles_star(out_dir / relion_name, per, scale=scale)
+        has_scores = all(s is not None for s in scored.values())
+        write_particles_star(out_dir / relion_name, per, scale=scale, scores_by_name=scored if has_scores else None)
         return [out_dir / relion_name]
     writer, ext = WRITERS[fmt]
     written = []
